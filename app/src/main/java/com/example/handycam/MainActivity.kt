@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.content.Context
 import android.view.View
+import android.util.Size
 
 private const val DEFAULT_PORT = 4747
 
@@ -50,6 +51,8 @@ class MainActivity : ComponentActivity() {
         val jpegEdit = findViewById<EditText>(R.id.jpegEdit)
         val fpsEdit = findViewById<EditText>(R.id.fpsEdit)
         val startButton = findViewById<Button>(R.id.startButton)
+        val previewButton = findViewById<Button>(R.id.previewButton)
+        val controlsButton = findViewById<Button>(R.id.controlsButton)
 
         hostEdit.setText("0.0.0.0")
         portEdit.setText(DEFAULT_PORT.toString())
@@ -103,7 +106,20 @@ class MainActivity : ComponentActivity() {
             }
             isStreaming = !isStreaming
         }
+
+        // Launch preview activity
+        previewButton.setOnClickListener {
+            // stop service if running to free the camera
+            stopStreaming()
+            startActivity(Intent(this, PreviewActivity::class.java))
+        }
+
+        controlsButton.setOnClickListener {
+            startActivity(Intent(this, ControlsActivity::class.java))
+        }
     }
+
+    // preview binding moved to PreviewActivity
 
     private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int, useAvc: Boolean) {
         val intent = Intent(this, StreamService::class.java).apply {

@@ -9,6 +9,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
+
         <EditText
             android:id="@+id/hostEdit"
             android:layout_width="match_parent"
@@ -102,6 +103,21 @@
             android:layout_height="wrap_content"
             android:text="Start Server"
             android:layout_marginTop="12dp" />
+
+        <Button
+            android:id="@+id/previewButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Preview"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/controlsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Camera Controls"
+            android:layout_marginTop="8dp"
+            android:enabled="false" />
 
     </LinearLayout>
 </ScrollView>
