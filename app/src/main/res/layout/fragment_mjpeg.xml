@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="MJPEG Settings" />
+
+    <EditText
+        android:id="@+id/jpegEdit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="JPEG Quality (0-100)"
+        android:inputType="number" />
+
+</LinearLayout>

@@ -57,6 +57,7 @@ class StreamService : LifecycleService() {
 
     private var encoder: MediaCodec? = null
     private var avcConfig: ByteArray? = null
+    private var avcBitrateUser: Int? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +76,8 @@ class StreamService : LifecycleService() {
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
                 useAvc = intent.getBooleanExtra("useAvc", false)
+                val ab = intent.getIntExtra("avcBitrate", -1)
+                avcBitrateUser = if (ab > 0) ab else null
 
                 try {
                     startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
@@ -280,8 +283,10 @@ class StreamService : LifecycleService() {
 
     private fun setupEncoder(width: Int, height: Int, fps: Int) {
         val mime = "video/avc"
-        // choose a balanced bitrate: pixels * fps scaled down (/20) gives reasonable quality
-        val bitrate = ((width.toLong() * height.toLong() * fps) / 20).toInt().coerceAtLeast(500_000)
+        // choose a higher-quality bitrate: allow a user-specified bitrate override,
+        // otherwise derive a reasonable default (pixels * fps / 10)
+        val defaultBitrate = ((width.toLong() * height.toLong() * fps) / 10).toInt().coerceAtLeast(800_000)
+        val bitrate = avcBitrateUser ?: defaultBitrate
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)

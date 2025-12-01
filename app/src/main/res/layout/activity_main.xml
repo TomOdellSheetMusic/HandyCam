@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:padding="16dp">
@@ -65,37 +66,27 @@
             android:layout_height="wrap_content"
             android:orientation="vertical" />
 
-        <LinearLayout
+        <!-- Tabs for codec-specific settings -->
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/settingsTabLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingTop="8dp">
+            android:layout_marginTop="12dp" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Use H.264 (AVC)" />
-
-            <Switch
-                android:id="@+id/useAvcSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp" />
-        </LinearLayout>
-
-        <EditText
-            android:id="@+id/jpegEdit"
+        <androidx.viewpager2.widget.ViewPager2
+            android:id="@+id/settingsPager"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="JPEG Quality (0-100)"
-            android:inputType="number" />
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal" />
 
         <EditText
             android:id="@+id/fpsEdit"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="Target FPS"
-            android:inputType="number" />
+            android:inputType="number"
+            android:layout_marginTop="8dp" />
 
         <Button
             android:id="@+id/startButton"

@@ -11,7 +11,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.TextView
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import android.content.Context
@@ -20,7 +20,7 @@ import android.util.Size
 
 private const val DEFAULT_PORT = 4747
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -47,8 +47,8 @@ class MainActivity : ComponentActivity() {
         val heightEdit = findViewById<EditText>(R.id.heightEdit)
         val cameraEdit = findViewById<EditText>(R.id.cameraEdit)
         val cameraListLayout = findViewById<LinearLayout>(R.id.cameraListLayout)
-        val useAvcSwitch = findViewById<Switch>(R.id.useAvcSwitch)
-        val jpegEdit = findViewById<EditText>(R.id.jpegEdit)
+        val settingsPager = findViewById<androidx.viewpager2.widget.ViewPager2>(R.id.settingsPager)
+        val settingsTabs = findViewById<com.google.android.material.tabs.TabLayout>(R.id.settingsTabLayout)
         val fpsEdit = findViewById<EditText>(R.id.fpsEdit)
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
@@ -57,7 +57,6 @@ class MainActivity : ComponentActivity() {
         portEdit.setText(DEFAULT_PORT.toString())
         widthEdit.setText("1080")
         heightEdit.setText("1920")
-        jpegEdit.setText("85")
         fpsEdit.setText("60")
 
         // Request camera permission early
@@ -86,18 +85,45 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) {}
 
+        // setup tabs + pager
+        val pagerAdapter = SettingsPagerAdapter(this)
+        settingsPager.adapter = pagerAdapter
+        com.google.android.material.tabs.TabLayoutMediator(settingsTabs, settingsPager) { tab, position ->
+            tab.text = if (position == 0) "MJPEG" else "AVC"
+        }.attach()
+
         startButton.setOnClickListener {
             val host = hostEdit.text.toString().ifBlank { "0.0.0.0" }
             val port = portEdit.text.toString().toIntOrNull() ?: DEFAULT_PORT
             val width = widthEdit.text.toString().toIntOrNull() ?: 1280
             val height = heightEdit.text.toString().toIntOrNull() ?: 720
             val camera = cameraEdit.text.toString().ifBlank { "back" }
-            val jpeg = jpegEdit.text.toString().toIntOrNull() ?: 85
             val fps = fpsEdit.text.toString().toIntOrNull() ?: 25
-            val useAvc = useAvcSwitch.isChecked
+
+            // read codec-specific settings from fragments
+            val mjpegQuality = pagerAdapter.getMjpegFragment().getJpegQuality()
+            val avcBitrate = pagerAdapter.getAvcFragment().getBitrate()
+
+            // determine which codec tab is selected
+            val useAvc = settingsTabs.selectedTabPosition == 1
+
+            val jpeg = mjpegQuality
 
             if (!isStreaming) {
-                ensurePermissionsAndStart(host, port, width, height, camera, jpeg, fps, useAvc)
+                // pass bitrate only if AVC selected
+                val intent = Intent(this, StreamService::class.java).apply {
+                    action = "com.example.handycam.ACTION_START"
+                    putExtra("host", host)
+                    putExtra("port", port)
+                    putExtra("width", width)
+                    putExtra("height", height)
+                    putExtra("camera", camera)
+                    putExtra("jpegQuality", jpeg)
+                    putExtra("targetFps", fps)
+                    putExtra("useAvc", useAvc)
+                    if (useAvc && avcBitrate != null) putExtra("avcBitrate", avcBitrate)
+                }
+                ContextCompat.startForegroundService(this, intent)
                 startButton.text = "Stop Server"
             } else {
                 stopStreaming()
@@ -108,8 +134,7 @@ class MainActivity : ComponentActivity() {
 
         // Launch preview activity
         previewButton.setOnClickListener {
-            // stop service if running to free the camera
-            stopStreaming()
+            // open preview without stopping the streaming service
             startActivity(Intent(this, PreviewActivity::class.java))
         }
     }
