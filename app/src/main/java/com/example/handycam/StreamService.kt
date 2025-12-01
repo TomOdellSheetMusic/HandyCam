@@ -17,7 +17,6 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
-import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -204,27 +203,7 @@ class StreamService : LifecycleService() {
 
             try {
                 cameraProvider.unbindAll()
-                val selector = try {
-                    if (selectedCamera == "front") {
-                        CameraSelector.DEFAULT_FRONT_CAMERA
-                    } else if (selectedCamera == "back") {
-                        CameraSelector.DEFAULT_BACK_CAMERA
-                    } else {
-                        val camId = selectedCamera.substringBefore(" ")
-                        CameraSelector.Builder()
-                            .addCameraFilter { cameras ->
-                                cameras.filter { camInfo ->
-                                    try {
-                                        Camera2CameraInfo.from(camInfo).cameraId == camId
-                                    } catch (_: Exception) { false }
-                                }
-                            }
-                            .build()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to build CameraSelector for '$selectedCamera', falling back", e)
-                    if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                }
+                val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                 cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
                 Log.i(TAG, "Camera bound in service: $selectedCamera")
             } catch (e: Exception) {
