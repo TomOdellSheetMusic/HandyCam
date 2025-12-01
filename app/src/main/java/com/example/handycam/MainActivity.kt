@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
 
             // read codec-specific settings from fragments
             val mjpegQuality = pagerAdapter.getMjpegFragment().getJpegQuality()
-            val avcBitrate = pagerAdapter.getAvcFragment().getBitrate()
+            val avcBitrateMbps = pagerAdapter.getAvcFragment().getBitrateMbps()
 
             // determine which codec tab is selected
             val useAvc = settingsTabs.selectedTabPosition == 1
@@ -121,7 +121,10 @@ class MainActivity : AppCompatActivity() {
                     putExtra("jpegQuality", jpeg)
                     putExtra("targetFps", fps)
                     putExtra("useAvc", useAvc)
-                    if (useAvc && avcBitrate != null) putExtra("avcBitrate", avcBitrate)
+                    if (useAvc && avcBitrateMbps != null) {
+                        val bps = (avcBitrateMbps * 1_000_000f).toInt()
+                        if (bps > 0) putExtra("avcBitrate", bps)
+                    }
                 }
                 ContextCompat.startForegroundService(this, intent)
                 startButton.text = "Stop Server"

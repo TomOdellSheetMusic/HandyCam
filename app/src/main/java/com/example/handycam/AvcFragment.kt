@@ -16,8 +16,8 @@ class AvcFragment : Fragment() {
         return v
     }
 
-    fun getBitrate(): Int? {
+    fun getBitrateMbps(): Float? {
         val text = bitrateEdit?.text?.toString() ?: ""
-        return text.toIntOrNull()
+        return text.toFloatOrNull()
     }
 }
