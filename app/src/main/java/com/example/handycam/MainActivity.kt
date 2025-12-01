@@ -52,7 +52,6 @@ class MainActivity : ComponentActivity() {
         val fpsEdit = findViewById<EditText>(R.id.fpsEdit)
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
-        val controlsButton = findViewById<Button>(R.id.controlsButton)
 
         hostEdit.setText("0.0.0.0")
         portEdit.setText(DEFAULT_PORT.toString())
@@ -112,10 +111,6 @@ class MainActivity : ComponentActivity() {
             // stop service if running to free the camera
             stopStreaming()
             startActivity(Intent(this, PreviewActivity::class.java))
-        }
-
-        controlsButton.setOnClickListener {
-            startActivity(Intent(this, ControlsActivity::class.java))
         }
     }
 

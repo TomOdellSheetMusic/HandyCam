@@ -10,6 +10,9 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 private const val TAG = "PreviewActivity"
 
@@ -22,6 +25,18 @@ class PreviewActivity : ComponentActivity() {
         // lock to landscape for preview
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         setContentView(R.layout.activity_preview)
+
+        // Enter immersive fullscreen (hide system navigation and status bars)
+        try {
+            val decorView = window.decorView
+            val insetsController = WindowCompat.getInsetsController(window, decorView)
+            insetsController?.let {
+                it.hide(WindowInsetsCompat.Type.systemBars())
+                it.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to set immersive mode", e)
+        }
 
         val previewView = findViewById<PreviewView>(R.id.previewViewFull)
         val stopBtn = findViewById<Button>(R.id.stopPreviewButton)

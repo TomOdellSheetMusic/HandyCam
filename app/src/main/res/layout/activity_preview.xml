@@ -32,7 +32,12 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Zoom" />
+            android:text="Zoom"
+            android:textColor="#FFFFFF"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="2" />
         <SeekBar
             android:id="@+id/zoomSeek"
             android:layout_width="match_parent"
@@ -42,7 +47,12 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Exposure" />
+            android:text="Exposure"
+            android:textColor="#FFFFFF"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="2" />
         <SeekBar
             android:id="@+id/exposureSeek"
             android:layout_width="match_parent"
@@ -60,14 +70,28 @@
                 android:id="@+id/focusCenterButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Focus Center" />
+                android:text="Refocus"
+                android:padding="3dp"
+                android:textColor="#FFFFFF"
+                android:background="#3B3B3B"
+                android:shadowColor="#80000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="2" />
 
             <Button
                 android:id="@+id/stopPreviewButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Stop"
-                android:layout_marginStart="16dp" />
+                android:textColor="#FFFFFF"
+                android:background="#3B3B3B"
+                android:padding="3dp"
+                android:layout_marginStart="16dp"
+                android:shadowColor="#80000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="2" />
         </LinearLayout>
     </LinearLayout>
 
