@@ -3,27 +3,19 @@ package com.example.handycam
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Switch
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.Bundle
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.Switch
+import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import android.content.Context
+import android.view.View
 
 private const val DEFAULT_PORT = 4747
 
@@ -32,102 +24,84 @@ class MainActivity : ComponentActivity() {
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
-        // no-op; we requested CAMERA early so the service can use it
+        // no-op
     }
 
     private val fgCameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
-        if (isGranted) {
-            // Permission granted — nothing else to do here; user can press Start again or we could auto-start.
-        }
+        // no-op
     }
+
+    private var isStreaming = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        setContentView(R.layout.activity_main)
+
+        val hostEdit = findViewById<EditText>(R.id.hostEdit)
+        val portEdit = findViewById<EditText>(R.id.portEdit)
+        val widthEdit = findViewById<EditText>(R.id.widthEdit)
+        val heightEdit = findViewById<EditText>(R.id.heightEdit)
+        val cameraEdit = findViewById<EditText>(R.id.cameraEdit)
+        val cameraListLayout = findViewById<LinearLayout>(R.id.cameraListLayout)
+        val useAvcSwitch = findViewById<Switch>(R.id.useAvcSwitch)
+        val jpegEdit = findViewById<EditText>(R.id.jpegEdit)
+        val fpsEdit = findViewById<EditText>(R.id.fpsEdit)
+        val startButton = findViewById<Button>(R.id.startButton)
+
+        hostEdit.setText("0.0.0.0")
+        portEdit.setText(DEFAULT_PORT.toString())
+        widthEdit.setText("1080")
+        heightEdit.setText("1920")
+        jpegEdit.setText("85")
+        fpsEdit.setText("25")
+
+        // Request camera permission early
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
-        setContent {
-            StreamingUI()
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun StreamingUI() {
-        var host by remember { mutableStateOf("0.0.0.0") }
-        var portStr by remember { mutableStateOf(DEFAULT_PORT.toString()) }
-        var resW by remember { mutableStateOf("1080") }
-        var resH by remember { mutableStateOf("1920") }
-        var cameraSel by remember { mutableStateOf("back") }
-        var jpegQuality by remember { mutableStateOf("85") }
-        var targetFps by remember { mutableStateOf("25") }
-        var useAvc by remember { mutableStateOf(false) }
-        val cameraList = remember { mutableStateListOf<String>() }
-
-        // populate camera list once
-        LaunchedEffect(Unit) {
+        // populate camera list
+        try {
             val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            try {
-                cm.cameraIdList.forEach { id ->
+            cm.cameraIdList.forEach { id ->
+                try {
                     val chars = cm.getCameraCharacteristics(id)
-                    val facing = when (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
-                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "front"
-                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "back"
+                    val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
+                        CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                        CameraCharacteristics.LENS_FACING_BACK -> "back"
                         else -> "unknown"
                     }
-                    cameraList.add("$id ($facing)")
-                }
-            } catch (_: Exception) {}
-            if (cameraList.isNotEmpty()) cameraSel = cameraList.first()
-        }
-        var isStreaming by remember { mutableStateOf(false) }
+                    val btn = Button(this).apply {
+                        text = "$id ($facing)"
+                        setOnClickListener { cameraEdit.setText(id) }
+                    }
+                    cameraListLayout.addView(btn)
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
 
-        Column(modifier = Modifier.padding(16.dp)) {
-            OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("Bind host (0.0.0.0)") })
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = portStr, onValueChange = { portStr = it }, label = { Text("Port") })
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = resW, onValueChange = { resW = it }, label = { Text("Width") })
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = resH, onValueChange = { resH = it }, label = { Text("Height") })
-            Spacer(Modifier.height(12.dp))
-            // camera selector: show camera id list if available, otherwise accept 'back'/'front'
-            OutlinedTextField(value = cameraSel, onValueChange = { cameraSel = it }, label = { Text("Camera (id or back/front)") })
-            Spacer(Modifier.height(8.dp))
-            if (cameraList.isNotEmpty()) {
-                // simple dropdown-like: show camera id buttons
-                Row { Text("Available:") }
-                cameraList.forEach { cam ->
-                    Spacer(Modifier.height(4.dp))
-                    Button(onClick = { cameraSel = cam.substringBefore(" ") }) { Text(cam) }
-                }
+        startButton.setOnClickListener {
+            val host = hostEdit.text.toString().ifBlank { "0.0.0.0" }
+            val port = portEdit.text.toString().toIntOrNull() ?: DEFAULT_PORT
+            val width = widthEdit.text.toString().toIntOrNull() ?: 1280
+            val height = heightEdit.text.toString().toIntOrNull() ?: 720
+            val camera = cameraEdit.text.toString().ifBlank { "back" }
+            val jpeg = jpegEdit.text.toString().toIntOrNull() ?: 85
+            val fps = fpsEdit.text.toString().toIntOrNull() ?: 25
+            val useAvc = useAvcSwitch.isChecked
+
+            if (!isStreaming) {
+                ensurePermissionsAndStart(host, port, width, height, camera, jpeg, fps, useAvc)
+                startButton.text = "Stop Server"
+            } else {
+                stopStreaming()
+                startButton.text = "Start Server"
             }
-            Spacer(Modifier.height(8.dp))
-            Row {
-                Text("Use H.264 (AVC)")
-                Spacer(Modifier.height(4.dp))
-                Switch(checked = useAvc, onCheckedChange = { useAvc = it })
-            }
-            OutlinedTextField(value = jpegQuality, onValueChange = { jpegQuality = it }, label = { Text("JPEG Quality (0-100)") })
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(value = targetFps, onValueChange = { targetFps = it }, label = { Text("Target FPS") })
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = {
-                if (!isStreaming) {
-                    val port = portStr.toIntOrNull() ?: DEFAULT_PORT
-                    ensurePermissionsAndStart(host, port, resW.toIntOrNull() ?: 1280, resH.toIntOrNull() ?: 720, cameraSel, jpegQuality.toIntOrNull() ?: 85, targetFps.toIntOrNull() ?: 25, useAvc)
-                } else {
-                    stopStreaming()
-                }
-                isStreaming = !isStreaming
-            }) {
-                Text(if (!isStreaming) "Start Server" else "Stop Server")
-            }
+            isStreaming = !isStreaming
         }
     }
 

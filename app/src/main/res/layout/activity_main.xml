@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <EditText
+            android:id="@+id/hostEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Bind host (0.0.0.0)"
+            android:inputType="text" />
+
+        <EditText
+            android:id="@+id/portEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Port"
+            android:inputType="number" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/widthEdit"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:hint="Width"
+                android:inputType="number" />
+
+            <EditText
+                android:id="@+id/heightEdit"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:hint="Height"
+                android:inputType="number"
+                android:layout_marginStart="8dp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/cameraEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Camera (id or back/front)"
+            android:inputType="text" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Available:" />
+
+        <LinearLayout
+            android:id="@+id/cameraListLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Use H.264 (AVC)" />
+
+            <Switch
+                android:id="@+id/useAvcSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/jpegEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="JPEG Quality (0-100)"
+            android:inputType="number" />
+
+        <EditText
+            android:id="@+id/fpsEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Target FPS"
+            android:inputType="number" />
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Server"
+            android:layout_marginTop="12dp" />
+
+    </LinearLayout>
+</ScrollView>
+
