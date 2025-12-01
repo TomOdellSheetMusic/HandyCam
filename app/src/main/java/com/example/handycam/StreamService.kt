@@ -38,11 +38,17 @@ private const val ACTION_START = "com.example.handycam.ACTION_START"
 private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 
 class StreamService : LifecycleService() {
-    private val frameQueue = LinkedBlockingQueue<ByteArray>(10)
+    // keep only the latest frame to minimize latency
+    private val frameQueue = LinkedBlockingQueue<ByteArray>(1)
     private var serverThread: Thread? = null
     private var running = false
     private var serverSocket: ServerSocket? = null
     private var channelNeedsUserEnable: Boolean = false
+
+    // runtime options filled from Intent extras
+    private var selectedCamera: String = "back"
+    private var jpegQuality: Int = 85
+    private var targetFps: Int = 25
 
     override fun onCreate() {
         super.onCreate()
@@ -57,15 +63,19 @@ class StreamService : LifecycleService() {
                 val port = intent.getIntExtra("port", 4747)
                 val width = intent.getIntExtra("width", 1280)
                 val height = intent.getIntExtra("height", 720)
+                selectedCamera = intent.getStringExtra("camera") ?: "back"
+                jpegQuality = intent.getIntExtra("jpegQuality", 85)
+                targetFps = intent.getIntExtra("targetFps", 25)
+
                 try {
-                    startForeground(NOTIF_ID, buildNotification("Streaming on $port"))
+                    startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
                 } catch (se: SecurityException) {
                     Log.e(TAG, "Unable to start foreground service with camera type: missing permission", se)
                     // Stop service to avoid repeatedly failing; caller should request the permission.
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, port, width, height)
+                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps)
             }
             ACTION_STOP -> {
                 stopStreaming()
@@ -133,20 +143,37 @@ class StreamService : LifecycleService() {
 
         builder.build()
     }
-
-    private fun createNotificationChannel() {
-        val name = "HandyCam Stream"
-        val desc = "Foreground service for streaming camera"
-        // use DEFAULT importance so the notification is visible in the shade when expanded
-        val chan = NotificationChannel(CHANNEL_ID, name, NotificationManager.IMPORTANCE_DEFAULT)
-        chan.description = desc
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(chan)
+    private fun notifyStreamingState(isStreaming: Boolean) {
+        val intent = Intent("com.example.handycam.STREAM_STATE").apply {
+            putExtra("isStreaming", isStreaming)
+        }
+        sendBroadcast(intent)
     }
 
-    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int) {
+    private fun createNotificationChannel() {
+        // Create the NotificationChannel, but only on API 26+ because
+        // the NotificationChannel class is not in the Support Library.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = CHANNEL_ID
+            val descriptionText = "HandyCam is active"
+            val importance = NotificationManager.IMPORTANCE_DEFAULT
+            val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
+                description = descriptionText
+            }
+            // Register the channel with the system.
+            val notificationManager: NotificationManager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int) {
         if (running) return
         running = true
+        // store runtime options
+        selectedCamera = camera
+        jpegQuality = jpegQ
+        targetFps = fps
 
         // Start CameraX analysis to capture frames
         lifecycleScope.launch(Dispatchers.Main) {
@@ -160,13 +187,15 @@ class StreamService : LifecycleService() {
 
             val cameraExecutor = Executors.newSingleThreadExecutor()
             analysisUseCase.setAnalyzer(cameraExecutor) { image ->
+                // compress on the camera executor to avoid blocking UI
                 handleImageProxy(image)
             }
 
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this@StreamService, CameraSelector.DEFAULT_BACK_CAMERA, analysisUseCase)
-                Log.i(TAG, "Camera bound in service")
+                val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
+                Log.i(TAG, "Camera bound in service: $selectedCamera")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to bind camera use cases in service", e)
             }
@@ -280,7 +309,8 @@ class StreamService : LifecycleService() {
 
             val baos = ByteArrayOutputStream()
             val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-            yuvImage.compressToJpeg(Rect(0, 0, width, height), 85, baos)
+            // use configured jpegQuality, clamp to reasonable range
+            yuvImage.compressToJpeg(Rect(0, 0, width, height), jpegQuality.coerceIn(10, 100), baos)
             val jpeg = baos.toByteArray()
 
             if (!frameQueue.offer(jpeg)) {
@@ -307,8 +337,10 @@ class StreamService : LifecycleService() {
             if (req.contains("/v5/video/") || req.contains("/v2/video/") || req.contains("/v1/video/")) {
                 Log.i(TAG, "Starting MJPEG stream to client (service)")
                 val out = client.getOutputStream()
-                val pollTimeoutMs = 1000L
+                val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
+                val pollTimeoutMs = intervalMs
                 try {
+                    var lastSent = 0L
                     while (running && !client.isClosed && client.isConnected) {
                         val frame = try {
                             frameQueue.poll(pollTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -320,7 +352,13 @@ class StreamService : LifecycleService() {
                             continue
                         }
 
-                        val pts = System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        if (now - lastSent < intervalMs) {
+                            // drop frame to respect target FPS; queue holds latest so latency stays low
+                            continue
+                        }
+
+                        val pts = now
                         val header = ByteBuffer.allocate(12)
                         header.putLong(pts)
                         header.putInt(frame.size)
@@ -329,6 +367,7 @@ class StreamService : LifecycleService() {
                             out.write(header.array())
                             out.write(frame)
                             out.flush()
+                            lastSent = now
                         } catch (se: java.net.SocketException) {
                             Log.i(TAG, "Socket closed by peer while writing: ${se.message}")
                             break
@@ -336,8 +375,6 @@ class StreamService : LifecycleService() {
                             Log.i(TAG, "IO error while writing to client: ${ioe.message}")
                             break
                         }
-
-                        try { Thread.sleep(40) } catch (_: InterruptedException) { break }
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "Stream loop error in service", t)
