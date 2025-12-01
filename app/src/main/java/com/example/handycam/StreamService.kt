@@ -214,7 +214,7 @@ class StreamService : LifecycleService() {
         // If AVC encoding requested, set up encoder
         if (useAvc) {
             try {
-                setupEncoder(width, height, targetFps)
+                setupEncoder(height, width, targetFps)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder", e)
                 useAvc = false
