@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
         widthEdit.setText("1080")
         heightEdit.setText("1920")
         jpegEdit.setText("85")
-        fpsEdit.setText("25")
+        fpsEdit.setText("60")
 
         // Request camera permission early
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)

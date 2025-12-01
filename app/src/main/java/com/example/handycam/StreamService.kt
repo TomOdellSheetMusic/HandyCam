@@ -69,11 +69,11 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 1280)
-                val height = intent.getIntExtra("height", 720)
+                val width = intent.getIntExtra("width", 720 ) // phone is upright so width and height are swapped
+                val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
-                targetFps = intent.getIntExtra("targetFps", 25)
+                targetFps = intent.getIntExtra("targetFps", 60)
                 useAvc = intent.getBooleanExtra("useAvc", false)
 
                 try {
@@ -280,12 +280,18 @@ class StreamService : LifecycleService() {
 
     private fun setupEncoder(width: Int, height: Int, fps: Int) {
         val mime = "video/avc"
-        val bitrate = (width * height * fps / 2).coerceAtLeast(500_000)
+        // choose a balanced bitrate: pixels * fps scaled down (/20) gives reasonable quality
+        val bitrate = ((width.toLong() * height.toLong() * fps) / 20).toInt().coerceAtLeast(500_000)
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            try {
+                setInteger(MediaFormat.KEY_BITRATE_MODE, android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            } catch (_: Exception) {
+                // ignore if not supported
+            }
         }
 
         encoder = MediaCodec.createEncoderByType(mime)
@@ -397,7 +403,12 @@ class StreamService : LifecycleService() {
                         } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                             break
                         } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            // format changed
+                            try {
+                                val outFmt = codec.outputFormat
+                                Log.i(TAG, "Encoder output format changed: $outFmt")
+                            } catch (e: Exception) {
+                                Log.i(TAG, "Encoder output format changed")
+                            }
                         } else {
                             break
                         }
