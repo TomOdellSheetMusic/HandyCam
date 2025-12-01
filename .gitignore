@@ -1,0 +1,51 @@
+droidcam-obs-plugin/
+droidcam.pcap
+
+# Gradle / build
+.gradle/
+/build/
+**/build/
+
+# Local configuration
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Kotlin/IDE caches
+.kotlin/
+
+# Android capture & native build output
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Generated JNI object files
+/obj/
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
+
+# Keystore files (do not commit your signing keys)
+*.jks
+*.keystore
+debug.keystore
+
+# Native libraries and archives
+*.so
+*.jar
+
+# Environment / secret files
+.env
+*.properties
+
+# Misc
+*.class
+
