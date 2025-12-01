@@ -13,6 +13,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExposedDropdownMenu
 import androidx.compose.material3.Switch
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
@@ -61,8 +65,8 @@ class MainActivity : ComponentActivity() {
     fun StreamingUI() {
         var host by remember { mutableStateOf("0.0.0.0") }
         var portStr by remember { mutableStateOf(DEFAULT_PORT.toString()) }
-        var resW by remember { mutableStateOf("720") }
-        var resH by remember { mutableStateOf("1280") }
+        var resW by remember { mutableStateOf("1080") }
+        var resH by remember { mutableStateOf("1920") }
         var cameraSel by remember { mutableStateOf("back") }
         var jpegQuality by remember { mutableStateOf("85") }
         var targetFps by remember { mutableStateOf("25") }
@@ -100,11 +104,33 @@ class MainActivity : ComponentActivity() {
             OutlinedTextField(value = cameraSel, onValueChange = { cameraSel = it }, label = { Text("Camera (id or back/front)") })
             Spacer(Modifier.height(8.dp))
             if (cameraList.isNotEmpty()) {
-                // simple dropdown-like: show camera id buttons
-                Row { Text("Available:") }
-                cameraList.forEach { cam ->
-                    Spacer(Modifier.height(4.dp))
-                    Button(onClick = { cameraSel = cam.substringBefore(" ") }) { Text(cam) }
+                // polished dropdown for camera selection
+                var expanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+                    OutlinedTextField(
+                        value = cameraList.find { it.startsWith(cameraSel) } ?: cameraSel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Select Camera") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                    )
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        cameraList.forEach { cam ->
+                            DropdownMenuItem(text = { Text(cam) }, onClick = {
+                                val newId = cam.substringBefore(" ")
+                                cameraSel = newId
+                                expanded = false
+                                // if streaming already active, tell service to switch camera
+                                if (isStreaming) {
+                                    val intent = Intent(this@MainActivity, StreamService::class.java).apply {
+                                        action = "com.example.handycam.ACTION_CHANGE_CAMERA"
+                                        putExtra("camera", newId)
+                                    }
+                                    startService(intent)
+                                }
+                            })
+                        }
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
