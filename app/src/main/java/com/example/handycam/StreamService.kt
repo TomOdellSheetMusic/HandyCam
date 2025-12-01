@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -30,6 +31,10 @@ import java.net.BindException
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaCodec.BufferInfo
 
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
@@ -49,6 +54,10 @@ class StreamService : LifecycleService() {
     private var selectedCamera: String = "back"
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
+    private var useAvc: Boolean = false
+
+    private var encoder: MediaCodec? = null
+    private var avcConfig: ByteArray? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -66,6 +75,7 @@ class StreamService : LifecycleService() {
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 25)
+                useAvc = intent.getBooleanExtra("useAvc", false)
 
                 try {
                     startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
@@ -75,7 +85,7 @@ class StreamService : LifecycleService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps)
+                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc)
             }
             ACTION_STOP -> {
                 stopStreaming()
@@ -167,13 +177,14 @@ class StreamService : LifecycleService() {
         }
     }
 
-    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int) {
+    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean) {
         if (running) return
         running = true
         // store runtime options
         selectedCamera = camera
         jpegQuality = jpegQ
         targetFps = fps
+        useAvc = useAvcFlag
 
         // Start CameraX analysis to capture frames
         lifecycleScope.launch(Dispatchers.Main) {
@@ -193,11 +204,41 @@ class StreamService : LifecycleService() {
 
             try {
                 cameraProvider.unbindAll()
-                val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                val selector = try {
+                    if (selectedCamera == "front") {
+                        CameraSelector.DEFAULT_FRONT_CAMERA
+                    } else if (selectedCamera == "back") {
+                        CameraSelector.DEFAULT_BACK_CAMERA
+                    } else {
+                        val camId = selectedCamera.substringBefore(" ")
+                        CameraSelector.Builder()
+                            .addCameraFilter { cameras ->
+                                cameras.filter { camInfo ->
+                                    try {
+                                        Camera2CameraInfo.from(camInfo).cameraId == camId
+                                    } catch (_: Exception) { false }
+                                }
+                            }
+                            .build()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to build CameraSelector for '$selectedCamera', falling back", e)
+                    if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                }
                 cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
                 Log.i(TAG, "Camera bound in service: $selectedCamera")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to bind camera use cases in service", e)
+            }
+        }
+
+        // If AVC encoding requested, set up encoder
+        if (useAvc) {
+            try {
+                setupEncoder(width, height, targetFps)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize encoder", e)
+                useAvc = false
             }
         }
 
@@ -243,6 +284,12 @@ class StreamService : LifecycleService() {
     private fun stopStreaming() {
         running = false
         try {
+            encoder?.stop()
+            encoder?.release()
+        } catch (_: Exception) {}
+        encoder = null
+        avcConfig = null
+        try {
             serverSocket?.close()
         } catch (e: Exception) {
             Log.w(TAG, "Error closing server socket", e)
@@ -250,6 +297,23 @@ class StreamService : LifecycleService() {
         serverThread?.interrupt()
         serverThread = null
         frameQueue.clear()
+    }
+
+    private fun setupEncoder(width: Int, height: Int, fps: Int) {
+        val mime = "video/avc"
+        val bitrate = (width * height * fps / 2).coerceAtLeast(500_000)
+        val format = MediaFormat.createVideoFormat(mime, width, height).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        }
+
+        encoder = MediaCodec.createEncoderByType(mime)
+        encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        encoder?.start()
+        avcConfig = null
+        Log.i(TAG, "Encoder initialized: ${width}x${height} @ ${fps}fps bitrate=$bitrate")
     }
 
     private fun handleImageProxy(image: ImageProxy) {
@@ -307,15 +371,72 @@ class StreamService : LifecycleService() {
                 }
             }
 
-            val baos = ByteArrayOutputStream()
-            val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-            // use configured jpegQuality, clamp to reasonable range
-            yuvImage.compressToJpeg(Rect(0, 0, width, height), jpegQuality.coerceIn(10, 100), baos)
-            val jpeg = baos.toByteArray()
+            if (encoder != null) {
+                // convert NV21 -> NV12 (swap U/V pairs)
+                val nv12 = ByteArray(nv21.size)
+                // copy Y
+                System.arraycopy(nv21, 0, nv12, 0, width * height)
+                var p = width * height
+                while (p < nv21.size) {
+                    // NV21 is VU VU..., NV12 is UV UV...
+                    val v = nv21[p]
+                    val u = nv21[p + 1]
+                    nv12[p] = u
+                    nv12[p + 1] = v
+                    p += 2
+                }
 
-            if (!frameQueue.offer(jpeg)) {
-                frameQueue.poll()
-                frameQueue.offer(jpeg)
+                try {
+                    val codec = encoder ?: throw IllegalStateException("encoder null")
+                    val inputIndex = codec.dequeueInputBuffer(0)
+                    if (inputIndex >= 0) {
+                        val inputBuf = codec.getInputBuffer(inputIndex)
+                        inputBuf?.clear()
+                        inputBuf?.put(nv12)
+                        val presentationTimeUs = System.nanoTime() / 1000
+                        codec.queueInputBuffer(inputIndex, 0, nv12.size, presentationTimeUs, 0)
+                    }
+
+                    val info = BufferInfo()
+                    while (true) {
+                        val outIndex = codec.dequeueOutputBuffer(info, 0)
+                        if (outIndex >= 0) {
+                            val outBuf = codec.getOutputBuffer(outIndex)
+                            val outBytes = ByteArray(info.size)
+                            outBuf?.get(outBytes)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                avcConfig = outBytes
+                                Log.i(TAG, "Saved AVC config size=${outBytes.size}")
+                            } else {
+                                // enqueue encoded frame (raw NALs)
+                                if (!frameQueue.offer(outBytes)) {
+                                    frameQueue.poll()
+                                    frameQueue.offer(outBytes)
+                                }
+                            }
+                            codec.releaseOutputBuffer(outIndex, false)
+                        } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            break
+                        } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            // format changed
+                        } else {
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Encoding error", e)
+                }
+            } else {
+                val baos = ByteArrayOutputStream()
+                val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+                // use configured jpegQuality, clamp to reasonable range
+                yuvImage.compressToJpeg(Rect(0, 0, width, height), jpegQuality.coerceIn(10, 100), baos)
+                val jpeg = baos.toByteArray()
+
+                if (!frameQueue.offer(jpeg)) {
+                    frameQueue.poll()
+                    frameQueue.offer(jpeg)
+                }
             }
 
         } catch (e: Exception) {
@@ -334,12 +455,39 @@ class StreamService : LifecycleService() {
             val req = if (read > 0) String(buf, 0, read) else ""
             Log.i(TAG, "Request (service): ${req.replace("\r","\\r").replace("\n","\\n").trim()}")
 
+            // parse requested format from the path
+            var requestedFormat = "jpg"
+            try {
+                val firstLine = req.replace("\r", "").split("\n").firstOrNull() ?: ""
+                val parts = firstLine.split(" ")
+                if (parts.size >= 2) {
+                    val path = parts[1]
+                    val segs = path.split('/').filter { it.isNotEmpty() }
+                    if (segs.size >= 3 && segs[0].startsWith("v")) {
+                        requestedFormat = segs[2]
+                    }
+                    Log.i(TAG, "Parsed request path=$path format=$requestedFormat")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse request line", e)
+            }
+
             if (req.contains("/v5/video/") || req.contains("/v2/video/") || req.contains("/v1/video/")) {
-                Log.i(TAG, "Starting MJPEG stream to client (service)")
                 val out = client.getOutputStream()
                 val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
                 val pollTimeoutMs = intervalMs
                 try {
+                    // if client requested AVC and we have codec config, send config packet first
+                    if (requestedFormat.startsWith("avc") && avcConfig != null) {
+                        val cfgHeader = ByteBuffer.allocate(12)
+                        cfgHeader.putLong(-1L)
+                        cfgHeader.putInt(avcConfig!!.size)
+                        out.write(cfgHeader.array())
+                        out.write(avcConfig)
+                        out.flush()
+                        Log.i(TAG, "Sent AVC config to client ${client.inetAddress}")
+                    }
+
                     var lastSent = 0L
                     while (running && !client.isClosed && client.isConnected) {
                         val frame = try {
@@ -354,7 +502,6 @@ class StreamService : LifecycleService() {
 
                         val now = System.currentTimeMillis()
                         if (now - lastSent < intervalMs) {
-                            // drop frame to respect target FPS; queue holds latest so latency stays low
                             continue
                         }
 

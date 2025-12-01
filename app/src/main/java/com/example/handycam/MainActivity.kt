@@ -66,6 +66,25 @@ class MainActivity : ComponentActivity() {
         var cameraSel by remember { mutableStateOf("back") }
         var jpegQuality by remember { mutableStateOf("85") }
         var targetFps by remember { mutableStateOf("25") }
+        var useAvc by remember { mutableStateOf(false) }
+        val cameraList = remember { mutableStateListOf<String>() }
+
+        // populate camera list once
+        LaunchedEffect(Unit) {
+            val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            try {
+                cm.cameraIdList.forEach { id ->
+                    val chars = cm.getCameraCharacteristics(id)
+                    val facing = when (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
+                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "back"
+                        else -> "unknown"
+                    }
+                    cameraList.add("$id ($facing)")
+                }
+            } catch (_: Exception) {}
+            if (cameraList.isNotEmpty()) cameraSel = cameraList.first().substringBefore(" ")
+        }
         var isStreaming by remember { mutableStateOf(false) }
 
         Column(modifier = Modifier.padding(16.dp)) {
@@ -77,8 +96,23 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(value = resH, onValueChange = { resH = it }, label = { Text("Height") })
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(value = cameraSel, onValueChange = { cameraSel = it }, label = { Text("Camera (back/front)") })
+            // camera selector: show camera id list if available, otherwise accept 'back'/'front'
+            OutlinedTextField(value = cameraSel, onValueChange = { cameraSel = it }, label = { Text("Camera (id or back/front)") })
             Spacer(Modifier.height(8.dp))
+            if (cameraList.isNotEmpty()) {
+                // simple dropdown-like: show camera id buttons
+                Row { Text("Available:") }
+                cameraList.forEach { cam ->
+                    Spacer(Modifier.height(4.dp))
+                    Button(onClick = { cameraSel = cam.substringBefore(" ") }) { Text(cam) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Text("Use H.264 (AVC)")
+                Spacer(Modifier.height(4.dp))
+                Switch(checked = useAvc, onCheckedChange = { useAvc = it })
+            }
             OutlinedTextField(value = jpegQuality, onValueChange = { jpegQuality = it }, label = { Text("JPEG Quality (0-100)") })
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(value = targetFps, onValueChange = { targetFps = it }, label = { Text("Target FPS") })
@@ -86,7 +120,7 @@ class MainActivity : ComponentActivity() {
             Button(onClick = {
                 if (!isStreaming) {
                     val port = portStr.toIntOrNull() ?: DEFAULT_PORT
-                    ensurePermissionsAndStart(host, port, resW.toIntOrNull() ?: 1280, resH.toIntOrNull() ?: 720, cameraSel, jpegQuality.toIntOrNull() ?: 85, targetFps.toIntOrNull() ?: 25)
+                    ensurePermissionsAndStart(host, port, resW.toIntOrNull() ?: 1280, resH.toIntOrNull() ?: 720, cameraSel, jpegQuality.toIntOrNull() ?: 85, targetFps.toIntOrNull() ?: 25, useAvc)
                 } else {
                     stopStreaming()
                 }
@@ -97,7 +131,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int) {
+    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int, useAvc: Boolean) {
         val intent = Intent(this, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_START"
             putExtra("host", bindHost)
@@ -107,11 +141,12 @@ class MainActivity : ComponentActivity() {
             putExtra("camera", camera)
             putExtra("jpegQuality", jpegQuality)
             putExtra("targetFps", targetFps)
+            putExtra("useAvc", useAvc)
         }
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun ensurePermissionsAndStart(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int) {
+    private fun ensurePermissionsAndStart(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int, useAvc: Boolean) {
         // Ensure CAMERA permission
         val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (!camGranted) {
@@ -128,7 +163,7 @@ class MainActivity : ComponentActivity() {
         }
 
         // All required permissions present — start the service
-        startStreaming(bindHost, port, width, height, camera, jpegQuality, targetFps)
+        startStreaming(bindHost, port, width, height, camera, jpegQuality, targetFps, useAvc)
     }
 
     private fun stopStreaming() {
