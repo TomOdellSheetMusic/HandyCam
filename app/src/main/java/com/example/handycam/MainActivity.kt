@@ -61,8 +61,8 @@ class MainActivity : ComponentActivity() {
     fun StreamingUI() {
         var host by remember { mutableStateOf("0.0.0.0") }
         var portStr by remember { mutableStateOf(DEFAULT_PORT.toString()) }
-        var resW by remember { mutableStateOf("720") }
-        var resH by remember { mutableStateOf("1280") }
+        var resW by remember { mutableStateOf("1080") }
+        var resH by remember { mutableStateOf("1920") }
         var cameraSel by remember { mutableStateOf("back") }
         var jpegQuality by remember { mutableStateOf("85") }
         var targetFps by remember { mutableStateOf("25") }
