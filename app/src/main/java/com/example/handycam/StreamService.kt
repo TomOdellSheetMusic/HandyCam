@@ -50,6 +50,7 @@ private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
 private const val ACTION_START = "com.example.handycam.ACTION_START"
 private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
+private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
 
 class StreamService : LifecycleService() {
     // keep only the latest frame to minimize latency
@@ -66,6 +67,8 @@ class StreamService : LifecycleService() {
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
     private var useAvc: Boolean = false
+    private var requestedWidth: Int = 1280
+    private var requestedHeight: Int = 720
 
     private var encoder: MediaCodec? = null
     private var avcConfig: ByteArray? = null
@@ -79,6 +82,12 @@ class StreamService : LifecycleService() {
     private var encoderInputSurface: Surface? = null
     private var encoderOutputThread: Thread? = null
     private var imageReader: android.media.ImageReader? = null
+    private var encoderWidth: Int = 0
+    private var encoderHeight: Int = 0
+    // CameraX fields for MJPEG path so we can rebind while running
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var analysisUseCase: ImageAnalysis? = null
+    private var cameraExecutor: java.util.concurrent.ExecutorService? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -109,6 +118,18 @@ class StreamService : LifecycleService() {
                     return START_NOT_STICKY
                 }
                 startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc)
+            }
+            ACTION_SET_CAMERA -> {
+                val newCam = intent.getStringExtra("camera") ?: ""
+                if (newCam.isNotBlank()) {
+                    Log.i(TAG, "Received camera switch request -> $newCam")
+                    // perform camera switch while streaming
+                    try {
+                        handleCameraSwitchRequest(newCam)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error switching camera", e)
+                    }
+                }
             }
             ACTION_STOP -> {
                 stopStreaming()
@@ -208,6 +229,8 @@ class StreamService : LifecycleService() {
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
+        requestedWidth = width
+        requestedHeight = height
 
         if (useAvc) {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
@@ -226,17 +249,21 @@ class StreamService : LifecycleService() {
             lifecycleScope.launch(Dispatchers.Main) {
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
                 val cameraProvider = cameraProviderFuture.get()
+                // keep reference so we can rebind while streaming
+                this@StreamService.cameraProvider = cameraProvider
 
                 val analysisUseCase = ImageAnalysis.Builder()
                     .setTargetResolution(android.util.Size(width, height))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
-                val cameraExecutor = Executors.newSingleThreadExecutor()
+                cameraExecutor = Executors.newSingleThreadExecutor()
                 analysisUseCase.setAnalyzer(cameraExecutor) { image ->
                     // compress on the camera executor to avoid blocking UI
                     handleImageProxy(image)
                 }
+                // keep reference so switch can rebind
+                this@StreamService.analysisUseCase = analysisUseCase
 
                 try {
                     cameraProvider.unbindAll()
@@ -293,6 +320,16 @@ class StreamService : LifecycleService() {
         // stop camera/capture session first to ensure producers stop feeding surfaces
         stopEncoderOutputReader()
         stopCamera2()
+        // If CameraX was active, unbind and shutdown its executor
+        try {
+            cameraProvider?.unbindAll()
+        } catch (_: Exception) {}
+        try {
+            cameraExecutor?.shutdownNow()
+        } catch (_: Exception) {}
+        cameraProvider = null
+        analysisUseCase = null
+        cameraExecutor = null
 
         try {
             // stop and release encoder after camera surfaces are torn down
@@ -340,6 +377,8 @@ class StreamService : LifecycleService() {
         encoderInputSurface = encoder?.createInputSurface()
         encoder?.start()
         avcConfig = null
+        encoderWidth = width
+        encoderHeight = height
         Log.i(TAG, "Encoder initialized (surface): ${width}x${height} @ ${fps}fps bitrate=$bitrate")
     }
 
@@ -637,11 +676,32 @@ class StreamService : LifecycleService() {
                     chosenWidth = chosen.width
                     chosenHeight = chosen.height
                     Log.i(TAG, "Selected camera-compatible size for encoder: ${chosenWidth}x${chosenHeight}")
-                    // create encoder with chosen size
-                    setupEncoder(chosenWidth, chosenHeight, fps)
+                    // create encoder with chosen size (reuse if possible)
+                    if (encoder != null && encoderWidth == chosenWidth && encoderHeight == chosenHeight) {
+                        Log.i(TAG, "Reusing existing encoder for ${chosenWidth}x${chosenHeight}")
+                    } else {
+                        // if there's an existing encoder with different size, tear it down first
+                        if (encoder != null) {
+                            stopEncoderOutputReader()
+                            try { encoder?.stop(); encoder?.release() } catch (_: Exception) {}
+                            encoder = null
+                        }
+                        setupEncoder(chosenWidth, chosenHeight, fps)
+                        if (encoderOutputThread == null) startEncoderOutputReader()
+                    }
                 } else {
                     Log.w(TAG, "No supported sizes returned, proceeding with requested size")
-                    setupEncoder(reqWidth, reqHeight, fps)
+                    if (encoder != null && encoderWidth == reqWidth && encoderHeight == reqHeight) {
+                        Log.i(TAG, "Reusing existing encoder for ${reqWidth}x${reqHeight}")
+                    } else {
+                        if (encoder != null) {
+                            stopEncoderOutputReader()
+                            try { encoder?.stop(); encoder?.release() } catch (_: Exception) {}
+                            encoder = null
+                        }
+                        setupEncoder(reqWidth, reqHeight, fps)
+                        if (encoderOutputThread == null) startEncoderOutputReader()
+                    }
                 }
             } else {
                 Log.w(TAG, "No StreamConfigurationMap available, using requested size")
@@ -657,8 +717,8 @@ class StreamService : LifecycleService() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
                     try {
-                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        val surface = encoderInputSurface
+                            val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                            val surface = encoderInputSurface
                         if (surface == null) {
                             Log.e(TAG, "Encoder input surface is null")
                             return
@@ -719,13 +779,15 @@ class StreamService : LifecycleService() {
         }
     }
 
-    private fun stopCamera2() {
+    private fun stopCamera2(releaseEncoderSurface: Boolean = true) {
         try { captureSession?.close() } catch (_: Exception) {}
         captureSession = null
         try { cameraDevice?.close() } catch (_: Exception) {}
         cameraDevice = null
-        try { encoderInputSurface?.release() } catch (_: Exception) {}
-        encoderInputSurface = null
+        if (releaseEncoderSurface) {
+            try { encoderInputSurface?.release() } catch (_: Exception) {}
+            encoderInputSurface = null
+        }
         try { imageReader?.close() } catch (_: Exception) {}
         imageReader = null
         try { cameraHandlerThread?.quitSafely() } catch (_: Exception) {}
@@ -749,5 +811,45 @@ class StreamService : LifecycleService() {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    private fun handleCameraSwitchRequest(newCam: String) {
+        // update stored selection
+        if (newCam == selectedCamera) {
+            Log.i(TAG, "Camera already set to $newCam")
+            return
+        }
+        selectedCamera = newCam
+
+        if (useAvc) {
+            // For AVC path, stop camera session but keep encoder surface, then reopen camera
+            try {
+                stopCamera2(releaseEncoderSurface = false)
+                // restart Camera2 session using existing encoder surface
+                startCamera2ToEncoder(requestedWidth, requestedHeight, targetFps)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to switch Camera2 camera", e)
+            }
+        } else {
+            // For CameraX MJPEG path, rebind the analysis use case to the new selector
+            lifecycleScope.launch(Dispatchers.Main) {
+                try {
+                    val provider = cameraProvider ?: run {
+                        Log.w(TAG, "CameraProvider not available when switching camera")
+                        return@launch
+                    }
+                    provider.unbindAll()
+                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    val useCase = analysisUseCase ?: run {
+                        Log.w(TAG, "Analysis use case not available when switching camera")
+                        return@launch
+                    }
+                    provider.bindToLifecycle(this@StreamService, selector, useCase)
+                    Log.i(TAG, "Switched CameraX binding to $selectedCamera")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to rebind CameraX for new camera", e)
+                }
+            }
+        }
     }
 }

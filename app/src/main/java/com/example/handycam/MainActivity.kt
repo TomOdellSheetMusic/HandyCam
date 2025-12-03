@@ -77,11 +77,27 @@ class MainActivity : AppCompatActivity() {
             // also add logical named picks for convenience
             val backBtn = Button(this).apply {
                 text = "back"
-                setOnClickListener { cameraEdit.setText("back") }
+                setOnClickListener {
+                    if (isStreaming) {
+                        val intent = Intent(this@MainActivity, StreamService::class.java).apply {
+                            action = "com.example.handycam.ACTION_SET_CAMERA"
+                            putExtra("camera", "back")
+                        }
+                        startService(intent)
+                    } else cameraEdit.setText("back")
+                }
             }
             val frontBtn = Button(this).apply {
                 text = "front"
-                setOnClickListener { cameraEdit.setText("front") }
+                setOnClickListener {
+                    if (isStreaming) {
+                        val intent = Intent(this@MainActivity, StreamService::class.java).apply {
+                            action = "com.example.handycam.ACTION_SET_CAMERA"
+                            putExtra("camera", "front")
+                        }
+                        startService(intent)
+                    } else cameraEdit.setText("front")
+                }
             }
             cameraListLayout.addView(backBtn)
             cameraListLayout.addView(frontBtn)
@@ -102,7 +118,15 @@ class MainActivity : AppCompatActivity() {
 
                     val btn = Button(this).apply {
                         text = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
-                        setOnClickListener { cameraEdit.setText(id) }
+                        setOnClickListener {
+                            if (isStreaming) {
+                                val intent = Intent(this@MainActivity, StreamService::class.java).apply {
+                                    action = "com.example.handycam.ACTION_SET_CAMERA"
+                                    putExtra("camera", id)
+                                }
+                                startService(intent)
+                            } else cameraEdit.setText(id)
+                        }
                     }
                     cameraListLayout.addView(btn)
                 } catch (_: Exception) {}
