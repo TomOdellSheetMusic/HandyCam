@@ -287,7 +287,12 @@ class MainActivity : AppCompatActivity() {
                 b.putInt("fps", fps)
                 b.putBoolean("useAvc", useAvc)
                 pendingStartBundle = b
-                ensurePermissionsAndStart(host, port, width, height, camera, jpeg, fps, useAvc)
+                val startedImmediately = ensurePermissionsAndStart(host, port, width, height, camera, jpeg, fps, useAvc)
+                if (startedImmediately) {
+                    // optimistic UI update; service will also broadcast state
+                    isStreaming = true
+                    startButton.text = "Stop Server"
+                }
             } else {
                 stopStreaming()
                 startButton.text = "Start Server"
@@ -341,12 +346,12 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun ensurePermissionsAndStart(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int, useAvc: Boolean) {
+    private fun ensurePermissionsAndStart(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQuality: Int, targetFps: Int, useAvc: Boolean): Boolean {
         // Ensure CAMERA permission
         val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (!camGranted) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-            return
+            return false
         }
 
         // Ensure FOREGROUND_SERVICE_CAMERA permission (Android 14+ requirement when targeting newer SDKs)
@@ -354,7 +359,7 @@ class MainActivity : AppCompatActivity() {
         val fgGranted = ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
         if (!fgGranted) {
             fgCameraPermissionLauncher.launch(fgPerm)
-            return
+            return false
         }
 
         // Ensure POST_NOTIFICATIONS permission on Android 13+
@@ -362,12 +367,13 @@ class MainActivity : AppCompatActivity() {
             val notifGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             if (!notifGranted) {
                 notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
+                return false
             }
         }
 
         // All required permissions present — start the service
         startStreaming(bindHost, port, width, height, camera, jpegQuality, targetFps, useAvc)
+        return true
     }
 
     private fun stopStreaming() {

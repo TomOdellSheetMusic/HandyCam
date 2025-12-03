@@ -31,7 +31,7 @@ local.properties
 
 # Logs
 *.log
-
+S
 # Keystore files (do not commit your signing keys)
 *.jks
 *.keystore

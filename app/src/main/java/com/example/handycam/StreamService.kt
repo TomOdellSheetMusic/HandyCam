@@ -118,6 +118,12 @@ class StreamService : LifecycleService() {
                     return START_NOT_STICKY
                 }
                 startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc)
+                // notify UI and persist state that streaming started
+                try {
+                    notifyStreamingState(true)
+                    val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("isStreaming", true).apply()
+                } catch (_: Exception) {}
             }
             ACTION_SET_CAMERA -> {
                 val newCam = intent.getStringExtra("camera") ?: ""
@@ -348,6 +354,11 @@ class StreamService : LifecycleService() {
         serverThread?.interrupt()
         serverThread = null
         frameQueue.clear()
+        try {
+            notifyStreamingState(false)
+            val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("isStreaming", false).apply()
+        } catch (_: Exception) {}
     }
 
     private fun setupEncoder(width: Int, height: Int, fps: Int) {
