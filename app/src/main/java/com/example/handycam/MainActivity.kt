@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
         val cameraListLayout = findViewById<LinearLayout>(R.id.cameraListLayout)
         val settingsPager = findViewById<androidx.viewpager2.widget.ViewPager2>(R.id.settingsPager)
         val settingsTabs = findViewById<com.google.android.material.tabs.TabLayout>(R.id.settingsTabLayout)
-        val fpsEdit = findViewById<EditText>(R.id.fpsEdit)
+        val fpsSpinner = findViewById<android.widget.Spinner>(R.id.fpsSpinner)
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
 
@@ -57,7 +57,13 @@ class MainActivity : AppCompatActivity() {
         portEdit.setText(DEFAULT_PORT.toString())
         widthEdit.setText("1080")
         heightEdit.setText("1920")
-        fpsEdit.setText("60")
+        // populate FPS spinner with common choices
+        val fpsChoices = listOf("15", "24", "30", "60")
+        val fpsAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, fpsChoices).also {
+            it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        fpsSpinner.adapter = fpsAdapter
+        fpsSpinner.setSelection(fpsChoices.indexOf("60"))
 
         // Request camera permission early
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -65,9 +71,20 @@ class MainActivity : AppCompatActivity() {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
-        // populate camera list
+        // populate camera list (buttons show id, facing and focal length when available)
         try {
             val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            // also add logical named picks for convenience
+            val backBtn = Button(this).apply {
+                text = "back"
+                setOnClickListener { cameraEdit.setText("back") }
+            }
+            val frontBtn = Button(this).apply {
+                text = "front"
+                setOnClickListener { cameraEdit.setText("front") }
+            }
+            cameraListLayout.addView(backBtn)
+            cameraListLayout.addView(frontBtn)
             cm.cameraIdList.forEach { id ->
                 try {
                     val chars = cm.getCameraCharacteristics(id)
@@ -76,8 +93,15 @@ class MainActivity : AppCompatActivity() {
                         CameraCharacteristics.LENS_FACING_BACK -> "back"
                         else -> "unknown"
                     }
+                    // try to get a representative focal length to distinguish wide/normal
+                    val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) {
+                        val f = focalArr[0]
+                        String.format("f=%.1fmm", f)
+                    } else ""
+
                     val btn = Button(this).apply {
-                        text = "$id ($facing)"
+                        text = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
                         setOnClickListener { cameraEdit.setText(id) }
                     }
                     cameraListLayout.addView(btn)
@@ -98,7 +122,7 @@ class MainActivity : AppCompatActivity() {
             val width = widthEdit.text.toString().toIntOrNull() ?: 1280
             val height = heightEdit.text.toString().toIntOrNull() ?: 720
             val camera = cameraEdit.text.toString().ifBlank { "back" }
-            val fps = fpsEdit.text.toString().toIntOrNull() ?: 25
+            val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 25
 
             // read codec-specific settings from fragments
             val mjpegQuality = pagerAdapter.getMjpegFragment().getJpegQuality()

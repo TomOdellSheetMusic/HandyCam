@@ -39,6 +39,12 @@ class PreviewActivity : ComponentActivity() {
         }
 
         val previewView = findViewById<PreviewView>(R.id.previewViewFull)
+        try {
+            // prefer surface-backed implementation to reduce frequent texture updates
+            previewView.implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to set PreviewView implementation mode", e)
+        }
         val stopBtn = findViewById<Button>(R.id.stopPreviewButton)
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)

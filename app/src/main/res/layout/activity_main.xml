@@ -80,12 +80,10 @@
             android:layout_marginTop="8dp"
             android:orientation="horizontal" />
 
-        <EditText
-            android:id="@+id/fpsEdit"
+        <Spinner
+            android:id="@+id/fpsSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Target FPS"
-            android:inputType="number"
             android:layout_marginTop="8dp" />
 
         <Button

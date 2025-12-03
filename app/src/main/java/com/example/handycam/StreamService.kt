@@ -290,14 +290,19 @@ class StreamService : LifecycleService() {
 
     private fun stopStreaming() {
         running = false
-        try {
-            encoder?.stop()
-            encoder?.release()
-        } catch (_: Exception) {}
-        encoder = null
-        avcConfig = null
+        // stop camera/capture session first to ensure producers stop feeding surfaces
         stopEncoderOutputReader()
         stopCamera2()
+
+        try {
+            // stop and release encoder after camera surfaces are torn down
+            encoder?.stop()
+            encoder?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping/releasing encoder", e)
+        }
+        encoder = null
+        avcConfig = null
         try {
             serverSocket?.close()
         } catch (e: Exception) {
