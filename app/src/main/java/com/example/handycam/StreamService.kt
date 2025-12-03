@@ -34,6 +34,16 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaCodec.BufferInfo
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.os.Handler
+import android.os.HandlerThread
+import android.view.Surface
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraAccessException
+import android.graphics.SurfaceTexture
 
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
@@ -43,7 +53,9 @@ private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 
 class StreamService : LifecycleService() {
     // keep only the latest frame to minimize latency
-    private val frameQueue = LinkedBlockingQueue<ByteArray>(1)
+    // keep a tiny buffer to reduce tearing when encoder/consumer timing is slightly off
+    private val frameQueue = LinkedBlockingQueue<ByteArray>(2)
+    private var encoderDroppedFrames = 0
     private var serverThread: Thread? = null
     private var running = false
     private var serverSocket: ServerSocket? = null
@@ -58,6 +70,15 @@ class StreamService : LifecycleService() {
     private var encoder: MediaCodec? = null
     private var avcConfig: ByteArray? = null
     private var avcBitrateUser: Int? = null
+    // Camera2 + encoder surfaces
+    private var cameraManager: CameraManager? = null
+    private var cameraDevice: CameraDevice? = null
+    private var captureSession: CameraCaptureSession? = null
+    private var cameraHandlerThread: HandlerThread? = null
+    private var cameraHandler: Handler? = null
+    private var encoderInputSurface: Surface? = null
+    private var encoderOutputThread: Thread? = null
+    private var imageReader: android.media.ImageReader? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -188,39 +209,43 @@ class StreamService : LifecycleService() {
         targetFps = fps
         useAvc = useAvcFlag
 
-        // Start CameraX analysis to capture frames
-        lifecycleScope.launch(Dispatchers.Main) {
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
-            val cameraProvider = cameraProviderFuture.get()
-
-            val analysisUseCase = ImageAnalysis.Builder()
-                .setTargetResolution(android.util.Size(width, height))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-
-            val cameraExecutor = Executors.newSingleThreadExecutor()
-            analysisUseCase.setAnalyzer(cameraExecutor) { image ->
-                // compress on the camera executor to avoid blocking UI
-                handleImageProxy(image)
-            }
-
-            try {
-                cameraProvider.unbindAll()
-                val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
-                Log.i(TAG, "Camera bound in service: $selectedCamera")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to bind camera use cases in service", e)
-            }
-        }
-
-        // If AVC encoding requested, set up encoder
         if (useAvc) {
+            // Start Camera2 -> encoder pipeline. The helper will pick a supported
+            // camera output size and call setupEncoder(...) with a compatible size.
             try {
-                setupEncoder(height, width, targetFps)
+                startCamera2ToEncoder(width, height, targetFps)
+                startEncoderOutputReader()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize encoder", e)
+                Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
+                // fallback to MJPEG if AVC init fails
                 useAvc = false
+                stopCamera2()
+            }
+        } else {
+            // Start CameraX analysis to capture frames (MJPEG path)
+            lifecycleScope.launch(Dispatchers.Main) {
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
+                val cameraProvider = cameraProviderFuture.get()
+
+                val analysisUseCase = ImageAnalysis.Builder()
+                    .setTargetResolution(android.util.Size(width, height))
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                val cameraExecutor = Executors.newSingleThreadExecutor()
+                analysisUseCase.setAnalyzer(cameraExecutor) { image ->
+                    // compress on the camera executor to avoid blocking UI
+                    handleImageProxy(image)
+                }
+
+                try {
+                    cameraProvider.unbindAll()
+                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
+                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to bind camera use cases in service", e)
+                }
             }
         }
 
@@ -271,6 +296,8 @@ class StreamService : LifecycleService() {
         } catch (_: Exception) {}
         encoder = null
         avcConfig = null
+        stopEncoderOutputReader()
+        stopCamera2()
         try {
             serverSocket?.close()
         } catch (e: Exception) {
@@ -285,14 +312,17 @@ class StreamService : LifecycleService() {
         val mime = "video/avc"
         // choose a higher-quality bitrate: allow a user-specified bitrate override,
         // otherwise derive a reasonable default (pixels * fps / 10)
-        val defaultBitrate = ((width.toLong() * height.toLong() * fps) / 10).toInt().coerceAtLeast(800_000)
+        // use a more generous default bitrate (pixels * fps / 6) to reduce blocking artifacts
+        val defaultBitrate = ((width.toLong() * height.toLong() * fps) / 6).toInt().coerceAtLeast(800_000)
         val bitrate = avcBitrateUser ?: defaultBitrate
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            // use input surface path
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             try {
+                // prefer VBR for better visual quality; if not supported fall back gracefully
                 setInteger(MediaFormat.KEY_BITRATE_MODE, android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             } catch (_: Exception) {
                 // ignore if not supported
@@ -301,9 +331,70 @@ class StreamService : LifecycleService() {
 
         encoder = MediaCodec.createEncoderByType(mime)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        // create an input surface for Camera2 to write into
+        encoderInputSurface = encoder?.createInputSurface()
         encoder?.start()
         avcConfig = null
-        Log.i(TAG, "Encoder initialized: ${width}x${height} @ ${fps}fps bitrate=$bitrate")
+        Log.i(TAG, "Encoder initialized (surface): ${width}x${height} @ ${fps}fps bitrate=$bitrate")
+    }
+
+    private fun startEncoderOutputReader() {
+        if (encoder == null) return
+        encoderOutputThread = Thread {
+            try {
+                val codec = encoder ?: return@Thread
+                val info = BufferInfo()
+                while (running && codec != null) {
+                    // short timeout so we drain quickly and avoid encoder internal backlog
+                    val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
+                    if (outIndex >= 0) {
+                        val outBuf = codec.getOutputBuffer(outIndex)
+                        val outBytes = ByteArray(info.size)
+                        outBuf?.get(outBytes)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            avcConfig = outBytes
+                            Log.i(TAG, "Saved AVC config size=${outBytes.size}")
+                        } else {
+                            if (!frameQueue.offer(outBytes)) {
+                                // queue is full: drop the oldest frame to keep latest
+                                frameQueue.poll()
+                                if (!frameQueue.offer(outBytes)) {
+                                    // if still failing, count drops for diagnostics
+                                    encoderDroppedFrames++
+                                    if (encoderDroppedFrames % 50 == 0) {
+                                        Log.w(TAG, "Encoder dropping frames; dropped total=$encoderDroppedFrames")
+                                    }
+                                }
+                            }
+                        }
+                        codec.releaseOutputBuffer(outIndex, false)
+                    } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        // no output currently
+                        continue
+                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        try {
+                            val outFmt = codec.outputFormat
+                            Log.i(TAG, "Encoder output format changed: $outFmt")
+                        } catch (e: Exception) {
+                            Log.i(TAG, "Encoder output format changed")
+                        }
+                    } else {
+                        // unexpected
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Encoder output reader error", t)
+            }
+            Log.i(TAG, "Encoder output reader exiting")
+        }
+        encoderOutputThread?.start()
+    }
+
+    private fun stopEncoderOutputReader() {
+        try {
+            encoderOutputThread?.interrupt()
+        } catch (_: Exception) {}
+        encoderOutputThread = null
     }
 
     private fun handleImageProxy(image: ImageProxy) {
@@ -375,52 +466,11 @@ class StreamService : LifecycleService() {
                     nv12[p + 1] = v
                     p += 2
                 }
-
-                try {
-                    val codec = encoder ?: throw IllegalStateException("encoder null")
-                    val inputIndex = codec.dequeueInputBuffer(0)
-                    if (inputIndex >= 0) {
-                        val inputBuf = codec.getInputBuffer(inputIndex)
-                        inputBuf?.clear()
-                        inputBuf?.put(nv12)
-                        val presentationTimeUs = System.nanoTime() / 1000
-                        codec.queueInputBuffer(inputIndex, 0, nv12.size, presentationTimeUs, 0)
-                    }
-
-                    val info = BufferInfo()
-                    while (true) {
-                        val outIndex = codec.dequeueOutputBuffer(info, 0)
-                        if (outIndex >= 0) {
-                            val outBuf = codec.getOutputBuffer(outIndex)
-                            val outBytes = ByteArray(info.size)
-                            outBuf?.get(outBytes)
-                            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                                avcConfig = outBytes
-                                Log.i(TAG, "Saved AVC config size=${outBytes.size}")
-                            } else {
-                                // enqueue encoded frame (raw NALs)
-                                if (!frameQueue.offer(outBytes)) {
-                                    frameQueue.poll()
-                                    frameQueue.offer(outBytes)
-                                }
-                            }
-                            codec.releaseOutputBuffer(outIndex, false)
-                        } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                            break
-                        } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            try {
-                                val outFmt = codec.outputFormat
-                                Log.i(TAG, "Encoder output format changed: $outFmt")
-                            } catch (e: Exception) {
-                                Log.i(TAG, "Encoder output format changed")
-                            }
-                        } else {
-                            break
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Encoding error", e)
-                }
+                // When using Surface input, we don't queue input buffers here. The encoder
+                // will be fed by Camera2. For devices that still use buffer input, the
+                // code above handled it; but with the new Camera2 surface approach we
+                // keep this branch as no-op because CameraX path won't be active when
+                // using AVC with surface input.
             } else {
                 val baos = ByteArrayOutputStream()
                 val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
@@ -534,5 +584,165 @@ class StreamService : LifecycleService() {
             try { client.close() } catch (_: Exception) {}
             Log.i(TAG, "Client disconnected (service)")
         }
+    }
+
+    // ----- Camera2 helper methods for encoder surface path -----
+    private fun startCamera2ToEncoder(reqWidth: Int, reqHeight: Int, fps: Int) {
+        try {
+            cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        } catch (e: Exception) {
+            Log.e(TAG, "CameraManager not available", e)
+            return
+        }
+
+        cameraHandlerThread = HandlerThread("Camera2Thread").also { it.start() }
+        cameraHandler = Handler(cameraHandlerThread!!.looper)
+
+        // pick camera id
+        val camId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+        if (camId == null) {
+            Log.e(TAG, "No camera id found for selector $selectedCamera")
+            return
+        }
+
+        // determine a supported output size for the camera for encoder surface
+        var chosenWidth = reqWidth
+        var chosenHeight = reqHeight
+        try {
+            val chars = cameraManager?.getCameraCharacteristics(camId)
+            val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            if (map != null) {
+                val sizes = map.getOutputSizes(SurfaceTexture::class.java)
+                if (sizes != null && sizes.isNotEmpty()) {
+                    // find exact match or choose closest by area
+                    var chosen = sizes[0]
+                    var bestDiff = Math.abs(chosen.width * chosen.height - reqWidth * reqHeight)
+                    for (s in sizes) {
+                        if (s.width == reqWidth && s.height == reqHeight) {
+                            chosen = s
+                            bestDiff = 0
+                            break
+                        }
+                        val diff = Math.abs(s.width * s.height - reqWidth * reqHeight)
+                        if (diff < bestDiff) {
+                            bestDiff = diff
+                            chosen = s
+                        }
+                    }
+                    chosenWidth = chosen.width
+                    chosenHeight = chosen.height
+                    Log.i(TAG, "Selected camera-compatible size for encoder: ${chosenWidth}x${chosenHeight}")
+                    // create encoder with chosen size
+                    setupEncoder(chosenWidth, chosenHeight, fps)
+                } else {
+                    Log.w(TAG, "No supported sizes returned, proceeding with requested size")
+                    setupEncoder(reqWidth, reqHeight, fps)
+                }
+            } else {
+                Log.w(TAG, "No StreamConfigurationMap available, using requested size")
+                setupEncoder(reqWidth, reqHeight, fps)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not query supported sizes, using requested size", e)
+            setupEncoder(reqWidth, reqHeight, fps)
+        }
+
+        try {
+            cameraManager?.openCamera(camId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    try {
+                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        val surface = encoderInputSurface
+                        if (surface == null) {
+                            Log.e(TAG, "Encoder input surface is null")
+                            return
+                        }
+                        // create an ImageReader as an additional consumer so some devices
+                        // will happily start streaming into the encoder surface
+                        val ir = imageReader ?: android.media.ImageReader.newInstance(
+                            chosenWidth.takeIf { it>0 } ?: 1280,
+                            chosenHeight.takeIf { it>0 } ?: 720,
+                            ImageFormat.YUV_420_888,
+                            2
+                        ).also { imageReader = it }
+
+                        ir.setOnImageAvailableListener({ reader ->
+                            // immediately close images; we only need this to be a valid consumer
+                            val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+                            try { img?.close() } catch (_: Exception) {}
+                        }, cameraHandler)
+
+                        builder.addTarget(surface)
+                        val targets = listOf(surface, ir.surface)
+                        camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                captureSession = session
+                                try {
+                                    session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                                    Log.i(TAG, "Camera2 session configured and repeating request started")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to start repeating request", e)
+                                }
+                            }
+
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                Log.e(TAG, "Camera2 session configuration failed")
+                            }
+                        }, cameraHandler)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to create capture request/session", e)
+                    }
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    Log.i(TAG, "Camera disconnected")
+                    try { camera.close() } catch (_: Exception) {}
+                    cameraDevice = null
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    Log.e(TAG, "Camera error: $error")
+                    try { camera.close() } catch (_: Exception) {}
+                    cameraDevice = null
+                }
+            }, cameraHandler)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Camera permission missing", e)
+        } catch (e: CameraAccessException) {
+            Log.e(TAG, "Camera access error", e)
+        }
+    }
+
+    private fun stopCamera2() {
+        try { captureSession?.close() } catch (_: Exception) {}
+        captureSession = null
+        try { cameraDevice?.close() } catch (_: Exception) {}
+        cameraDevice = null
+        try { encoderInputSurface?.release() } catch (_: Exception) {}
+        encoderInputSurface = null
+        try { imageReader?.close() } catch (_: Exception) {}
+        imageReader = null
+        try { cameraHandlerThread?.quitSafely() } catch (_: Exception) {}
+        cameraHandlerThread = null
+        cameraHandler = null
+    }
+
+    private fun findCameraId(sel: String): String? {
+        val mgr = cameraManager ?: return null
+        try {
+            for (id in mgr.cameraIdList) {
+                try {
+                    val chars = mgr.getCameraCharacteristics(id)
+                    val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                    if ((sel == "back" && facing == CameraCharacteristics.LENS_FACING_BACK) ||
+                        (sel == "front" && facing == CameraCharacteristics.LENS_FACING_FRONT) ||
+                        id == sel) {
+                        return id
+                    }
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+        return null
     }
 }
