@@ -1,5 +1,5 @@
 # HandyCam
-HandyCam is a Free Libre Open Source Software that works as a replacement for the popular Smartphone Webcam Software Droidcam. It works in tandem with the [Official Droidcam OBS Plugin](https://github.com/dev47apps/droidcam-obs-plugin).
+HandyCam is a Free Libre Open Source Software that works as a replacement client for the popular Smartphone Webcam Software Droidcam. It works in tandem with the [Official Droidcam OBS Plugin](https://github.com/dev47apps/droidcam-obs-plugin).
 The purpose of HandyCam is to allow you to use any reasonably recent smartphone as a mobile webcam with OBS.
 
 # Features
