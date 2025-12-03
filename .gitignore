@@ -3,8 +3,7 @@ droidcam.pcap
 
 # Gradle / build
 .gradle/
-/build/
-**/build/
+
 
 # Local configuration
 local.properties

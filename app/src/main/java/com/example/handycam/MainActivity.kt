@@ -1,6 +1,7 @@
 package com.example.handycam
 
 import android.Manifest
+import android.os.Build
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
@@ -25,16 +26,57 @@ class MainActivity : AppCompatActivity() {
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
-        // no-op
+        if (isGranted) tryStartPendingIfPermsGranted()
+    }
+
+    private val notifPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) tryStartPendingIfPermsGranted()
     }
 
     private val fgCameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
-        // no-op
+        if (isGranted) tryStartPendingIfPermsGranted()
     }
 
     private var isStreaming = false
+    private var streamStateReceiver: android.content.BroadcastReceiver? = null
+    private val PREFS = "handy_prefs"
+    private var pendingStartBundle: android.os.Bundle? = null
+
+    private fun tryStartPendingIfPermsGranted() {
+        val b = pendingStartBundle ?: return
+        // check permissions
+        val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val fgPerm = "android.permission.FOREGROUND_SERVICE_CAMERA"
+        val fgGranted = ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
+        val notifGranted = if (Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        if (camGranted && fgGranted && notifGranted) {
+            val host = b.getString("host") ?: "0.0.0.0"
+            val port = b.getInt("port", DEFAULT_PORT)
+            val width = b.getInt("width", 1280)
+            val height = b.getInt("height", 720)
+            val camera = b.getString("camera") ?: "back"
+            val jpeg = b.getInt("jpegQuality", 85)
+            val fps = b.getInt("fps", 25)
+            val useAvc = b.getBoolean("useAvc", false)
+
+            try {
+                startStreaming(host, port, width, height, camera, jpeg, fps, useAvc)
+                isStreaming = true
+                pendingStartBundle = null
+                try {
+                    val btn = findViewById<Button>(R.id.startButton)
+                    runOnUiThread { btn.text = "Stop Server" }
+                } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,17 +95,22 @@ class MainActivity : AppCompatActivity() {
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
 
-        hostEdit.setText("0.0.0.0")
-        portEdit.setText(DEFAULT_PORT.toString())
-        widthEdit.setText("1080")
-        heightEdit.setText("1920")
+        // load saved settings
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        hostEdit.setText(prefs.getString("host", "0.0.0.0"))
+        portEdit.setText(prefs.getInt("port", DEFAULT_PORT).toString())
+        widthEdit.setText(prefs.getInt("width", 1080).toString())
+        heightEdit.setText(prefs.getInt("height", 1920).toString())
+        // defer camera display until we've populated the camera list; remember saved value
+        val savedCamera = prefs.getString("camera", "back")
         // populate FPS spinner with common choices
         val fpsChoices = listOf("15", "24", "30", "60")
         val fpsAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, fpsChoices).also {
             it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         fpsSpinner.adapter = fpsAdapter
-        fpsSpinner.setSelection(fpsChoices.indexOf("60"))
+        val savedFps = prefs.getInt("fps", 60).toString()
+        fpsSpinner.setSelection(fpsChoices.indexOf(savedFps).coerceAtLeast(0))
 
         // Request camera permission early
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -84,7 +131,11 @@ class MainActivity : AppCompatActivity() {
                             putExtra("camera", "back")
                         }
                         startService(intent)
-                    } else cameraEdit.setText("back")
+                    } else {
+                        cameraEdit.tag = null
+                        cameraEdit.setText("back")
+                        try { prefs.edit().putString("camera", "back").apply() } catch (_: Exception) {}
+                    }
                 }
             }
             val frontBtn = Button(this).apply {
@@ -96,7 +147,11 @@ class MainActivity : AppCompatActivity() {
                             putExtra("camera", "front")
                         }
                         startService(intent)
-                    } else cameraEdit.setText("front")
+                    } else {
+                        cameraEdit.tag = null
+                        cameraEdit.setText("front")
+                        try { prefs.edit().putString("camera", "front").apply() } catch (_: Exception) {}
+                    }
                 }
             }
             cameraListLayout.addView(backBtn)
@@ -111,26 +166,59 @@ class MainActivity : AppCompatActivity() {
                     }
                     // try to get a representative focal length to distinguish wide/normal
                     val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                    val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) {
-                        val f = focalArr[0]
-                        String.format("f=%.1fmm", f)
-                    } else ""
+                            val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) {
+                                val f = focalArr[0]
+                                String.format("f=%.1fmm", f)
+                            } else ""
 
-                    val btn = Button(this).apply {
-                        text = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
-                        setOnClickListener {
-                            if (isStreaming) {
-                                val intent = Intent(this@MainActivity, StreamService::class.java).apply {
-                                    action = "com.example.handycam.ACTION_SET_CAMERA"
-                                    putExtra("camera", id)
+                            val label = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
+                            val btn = Button(this).apply {
+                                text = label
+                                setOnClickListener {
+                                    if (isStreaming) {
+                                        val intent = Intent(this@MainActivity, StreamService::class.java).apply {
+                                            action = "com.example.handycam.ACTION_SET_CAMERA"
+                                            putExtra("camera", id)
+                                        }
+                                        startService(intent)
+                                    } else {
+                                        // display human label but keep the real id in tag
+                                        cameraEdit.tag = id
+                                        cameraEdit.setText(label)
+                                        try { prefs.edit().putString("camera", id).apply() } catch (_: Exception) {}
+                                    }
                                 }
-                                startService(intent)
-                            } else cameraEdit.setText(id)
-                        }
-                    }
+                            }
                     cameraListLayout.addView(btn)
                 } catch (_: Exception) {}
             }
+                    // after populating list, restore saved camera selection (id or logical)
+                    try {
+                        if (!savedCamera.isNullOrEmpty()) {
+                            if (savedCamera == "back" || savedCamera == "front") {
+                                cameraEdit.tag = null
+                                cameraEdit.setText(savedCamera)
+                            } else {
+                                // if saved value matches a physical id, find its button label
+                                if (cm.cameraIdList.contains(savedCamera)) {
+                                    val chars2 = cm.getCameraCharacteristics(savedCamera)
+                                    val facing2 = when (chars2.get(CameraCharacteristics.LENS_FACING)) {
+                                        CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                                        CameraCharacteristics.LENS_FACING_BACK -> "back"
+                                        else -> "unknown"
+                                    }
+                                    val focalArr2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                    val focalDesc2 = if (focalArr2 != null && focalArr2.isNotEmpty()) String.format("f=%.1fmm", focalArr2[0]) else ""
+                                    val lbl = if (focalDesc2.isNotEmpty()) "$savedCamera ($facing2, $focalDesc2)" else "$savedCamera ($facing2)"
+                                    cameraEdit.tag = savedCamera
+                                    cameraEdit.setText(lbl)
+                                } else {
+                                    cameraEdit.tag = null
+                                    cameraEdit.setText(savedCamera)
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
         } catch (_: Exception) {}
 
         // setup tabs + pager
@@ -140,12 +228,27 @@ class MainActivity : AppCompatActivity() {
             tab.text = if (position == 0) "MJPEG" else "AVC"
         }.attach()
 
+        // restore selected tab from prefs
+        val selectedTab = prefs.getInt("selectedTab", 0).coerceIn(0, 1)
+        settingsTabs.getTabAt(selectedTab)?.select()
+
+        // persist tab selection changes
+        settingsTabs.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
+                try {
+                    prefs.edit().putInt("selectedTab", tab?.position ?: 0).apply()
+                } catch (_: Exception) {}
+            }
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
+        })
+
         startButton.setOnClickListener {
             val host = hostEdit.text.toString().ifBlank { "0.0.0.0" }
             val port = portEdit.text.toString().toIntOrNull() ?: DEFAULT_PORT
             val width = widthEdit.text.toString().toIntOrNull() ?: 1280
             val height = heightEdit.text.toString().toIntOrNull() ?: 720
-            val camera = cameraEdit.text.toString().ifBlank { "back" }
+            val camera = (cameraEdit.tag as? String) ?: cameraEdit.text.toString().ifBlank { "back" }
             val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 25
 
             // read codec-specific settings from fragments
@@ -157,30 +260,40 @@ class MainActivity : AppCompatActivity() {
 
             val jpeg = mjpegQuality
 
+            // save current settings to prefs
+            try {
+                val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                p.putString("host", host)
+                p.putInt("port", port)
+                p.putInt("width", width)
+                p.putInt("height", height)
+                p.putString("camera", camera)
+                p.putInt("jpegQuality", jpeg)
+                p.putInt("fps", fps)
+                p.putBoolean("useAvc", useAvc)
+                if (avcBitrateMbps != null) p.putFloat("avcMbps", avcBitrateMbps)
+                p.apply()
+            } catch (_: Exception) {}
+
             if (!isStreaming) {
-                // pass bitrate only if AVC selected
-                val intent = Intent(this, StreamService::class.java).apply {
-                    action = "com.example.handycam.ACTION_START"
-                    putExtra("host", host)
-                    putExtra("port", port)
-                    putExtra("width", width)
-                    putExtra("height", height)
-                    putExtra("camera", camera)
-                    putExtra("jpegQuality", jpeg)
-                    putExtra("targetFps", fps)
-                    putExtra("useAvc", useAvc)
-                    if (useAvc && avcBitrateMbps != null) {
-                        val bps = (avcBitrateMbps * 1_000_000f).toInt()
-                        if (bps > 0) putExtra("avcBitrate", bps)
-                    }
-                }
-                ContextCompat.startForegroundService(this, intent)
-                startButton.text = "Stop Server"
+                // queue start params and ask for any missing permissions; auto-start when granted
+                val b = android.os.Bundle()
+                b.putString("host", host)
+                b.putInt("port", port)
+                b.putInt("width", width)
+                b.putInt("height", height)
+                b.putString("camera", camera)
+                b.putInt("jpegQuality", jpeg)
+                b.putInt("fps", fps)
+                b.putBoolean("useAvc", useAvc)
+                pendingStartBundle = b
+                ensurePermissionsAndStart(host, port, width, height, camera, jpeg, fps, useAvc)
             } else {
                 stopStreaming()
                 startButton.text = "Start Server"
+                isStreaming = false
+                pendingStartBundle = null
             }
-            isStreaming = !isStreaming
         }
 
         // Launch preview activity
@@ -188,6 +301,27 @@ class MainActivity : AppCompatActivity() {
             // open preview without stopping the streaming service
             startActivity(Intent(this, PreviewActivity::class.java))
         }
+        // initialize startButton from saved streaming state and register receiver
+        val wasStreaming = prefs.getBoolean("isStreaming", false)
+        isStreaming = wasStreaming
+        startButton.text = if (isStreaming) "Stop Server" else "Start Server"
+
+        streamStateReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val running = intent?.getBooleanExtra("isStreaming", false) ?: false
+                runOnUiThread {
+                    isStreaming = running
+                    startButton.text = if (running) "Stop Server" else "Start Server"
+                }
+            }
+        }
+        // register as not exported to comply with Android 14+ receiver requirements
+        registerReceiver(streamStateReceiver, android.content.IntentFilter("com.example.handycam.STREAM_STATE"), Context.RECEIVER_NOT_EXPORTED)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { streamStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
     }
 
     // preview binding moved to PreviewActivity
@@ -221,6 +355,15 @@ class MainActivity : AppCompatActivity() {
         if (!fgGranted) {
             fgCameraPermissionLauncher.launch(fgPerm)
             return
+        }
+
+        // Ensure POST_NOTIFICATIONS permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val notifGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            if (!notifGranted) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
         }
 
         // All required permissions present — start the service
