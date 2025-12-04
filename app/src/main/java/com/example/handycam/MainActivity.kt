@@ -51,7 +51,9 @@ class MainActivity : AppCompatActivity() {
         // check permissions
         val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val fgPerm = "android.permission.FOREGROUND_SERVICE_CAMERA"
-        val fgGranted = ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
+        val fgGranted = if (Build.VERSION.SDK_INT >= 34) {
+            ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
+        } else true
         val notifGranted = if (Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         } else true
@@ -356,10 +358,12 @@ class MainActivity : AppCompatActivity() {
 
         // Ensure FOREGROUND_SERVICE_CAMERA permission (Android 14+ requirement when targeting newer SDKs)
         val fgPerm = "android.permission.FOREGROUND_SERVICE_CAMERA"
-        val fgGranted = ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
-        if (!fgGranted) {
-            fgCameraPermissionLauncher.launch(fgPerm)
-            return false
+        if (Build.VERSION.SDK_INT >= 34) {
+            val fgGranted = ContextCompat.checkSelfPermission(this, fgPerm) == PackageManager.PERMISSION_GRANTED
+            if (!fgGranted) {
+                fgCameraPermissionLauncher.launch(fgPerm)
+                return false
+            }
         }
 
         // Ensure POST_NOTIFICATIONS permission on Android 13+
