@@ -35,7 +35,8 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-
+      - name: Set working directory
+        run: cd HandyCam
       - name: Build the app
         run: ./gradlew build                                         # Update this to build your Android or iOS application
 
