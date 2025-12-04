@@ -42,7 +42,6 @@ debug.keystore
 
 # Environment / secret files
 .env
-*.properties
 
 # Misc
 *.class
