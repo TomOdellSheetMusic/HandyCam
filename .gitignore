@@ -39,7 +39,6 @@ debug.keystore
 
 # Native libraries and archives
 *.so
-*.jar
 
 # Environment / secret files
 .env
