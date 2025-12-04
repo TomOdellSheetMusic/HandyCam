@@ -9,7 +9,10 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 - Connection over Wifi or USB (USB Debugging has to be enabled on the phone)
   
 ## Installation
-Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source!
+Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
+Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
 
 ## ToDo
 - Add Camera Controls
+- Add Wifi Discovery
+- Clean up Code
