@@ -87,16 +87,63 @@ class CameraControlActivity : AppCompatActivity() {
         }
 
         flashBtn.setOnClickListener {
-            SharedSurfaceProvider.cameraControl?.let { ctrl ->
-                // toggle torch
+            val ctrl = SharedSurfaceProvider.cameraControl
+            val mgr = cameraManager
+            if (ctrl == null) {
+                // Try to toggle via CameraManager as a fallback
+                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                val prefCam = prefs.getString("camera", null)
+                val camIdFallback = try {
+                    if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition)
+                } catch (_: Exception) { null }
+                if (camIdFallback != null) {
+                    lifecycleScope.launch(Dispatchers.Main) {
+                        try {
+                            val info = SharedSurfaceProvider.cameraInfo
+                            val currentTorch = info?.torchState?.value
+                            val enable = currentTorch != androidx.camera.core.TorchState.ON
+                            try {
+                                mgr?.setTorchMode(camIdFallback, enable)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "CameraManager.setTorchMode failed", e)
+                                Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Torch toggle fallback failed", e)
+                            Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // toggle torch via CameraX control, with CameraManager fallback
                 lifecycleScope.launch(Dispatchers.Main) {
                     try {
                         val info = SharedSurfaceProvider.cameraInfo ?: return@launch
                         val torchState = info.torchState.value
                         val enable = torchState != androidx.camera.core.TorchState.ON
-                        ctrl.enableTorch(enable)
+                        try {
+                            ctrl.enableTorch(enable)
+                        } catch (e: Exception) {
+                            // Some implementations return a ListenableFuture; attempt to call anyway
+                            try {
+                                val f = ctrl.javaClass.getMethod("enableTorch", Boolean::class.javaPrimitiveType).invoke(ctrl, enable)
+                            } catch (_: Exception) {}
+                        }
+
+                        // Also attempt CameraManager fallback to ensure hardware torch toggles on some devices
+                        try {
+                            val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                            val prefCam = prefs.getString("camera", null)
+                            val camIdFallback = try { if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition) } catch (_: Exception) { null }
+                            if (camIdFallback != null) {
+                                try { mgr?.setTorchMode(camIdFallback, enable) } catch (_: Exception) {}
+                            }
+                        } catch (_: Exception) {}
                     } catch (e: Exception) {
                         Log.w(TAG, "Torch toggle failed", e)
+                        Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -233,14 +280,28 @@ class CameraControlActivity : AppCompatActivity() {
         SharedSurfaceProvider.cameraInfo?.let { info ->
             val torchState = info.torchState.value
             try {
-                if (torchState == androidx.camera.core.TorchState.ON) {
-                    flashBtn.setImageResource(android.R.drawable.ic_menu_camera)
-                } else {
-                    flashBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-                }
+                // set lightning bolt and tint it to indicate state
+                flashBtn.setImageResource(R.drawable.ic_flash)
+                val color = if (torchState == androidx.camera.core.TorchState.ON) android.graphics.Color.YELLOW else android.graphics.Color.WHITE
+                flashBtn.imageTintList = android.content.res.ColorStateList.valueOf(color)
             } catch (_: Exception) {}
             val ev = info.exposureState.exposureCompensationIndex
             exposureLabel.text = "EV: $ev"
+        } ?: run {
+            // If CameraInfo not available yet, try to infer flash availability from CameraManager
+            try {
+                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                val prefCam = prefs.getString("camera", null)
+                val mgr = cameraManager
+                val camIdFallback = try { if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition) } catch (_: Exception) { null }
+                if (camIdFallback != null) {
+                    val chars = mgr?.getCameraCharacteristics(camIdFallback)
+                    val hasFlash = chars?.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    flashBtn.setImageResource(R.drawable.ic_flash)
+                    flashBtn.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+                    flashBtn.alpha = if (hasFlash) 1.0f else 0.4f
+                }
+            } catch (_: Exception) {}
         }
     }
 
