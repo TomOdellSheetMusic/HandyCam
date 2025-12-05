@@ -51,6 +51,7 @@ private const val NOTIF_ID = 1001
 private const val ACTION_START = "com.example.handycam.ACTION_START"
 private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
+private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
 
 class StreamService : LifecycleService() {
     // keep only the latest frame to minimize latency
@@ -88,6 +89,11 @@ class StreamService : LifecycleService() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysisUseCase: ImageAnalysis? = null
     private var cameraExecutor: java.util.concurrent.ExecutorService? = null
+    
+    // Preview surface management
+    @Volatile
+    private var previewSurface: Surface? = null
+    private var previewUseCase: androidx.camera.core.Preview? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -100,7 +106,7 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 720 ) // phone is upright so width and height are swapped
+                val width = intent.getIntExtra("width", 1080 ) // phone is upright so width and height are swapped
                 val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
@@ -136,6 +142,11 @@ class StreamService : LifecycleService() {
                         Log.e(TAG, "Error switching camera", e)
                     }
                 }
+            }
+            ACTION_SET_PREVIEW_SURFACE -> {
+                val surfaceToken = intent.getStringExtra("surfaceToken")
+                Log.i(TAG, "Received preview surface update: $surfaceToken")
+                handlePreviewSurfaceUpdate(surfaceToken)
             }
             ACTION_STOP -> {
                 stopStreaming()
@@ -252,6 +263,15 @@ class StreamService : LifecycleService() {
             }
         } else {
             // Start CameraX analysis to capture frames (MJPEG path)
+            // Initialize camera manager early so findCameraId and buildCameraSelectorForId can work
+            try {
+                if (cameraManager == null) {
+                    cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get CameraManager for MJPEG path", e)
+            }
+            
             lifecycleScope.launch(Dispatchers.Main) {
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
                 val cameraProvider = cameraProviderFuture.get()
@@ -270,12 +290,42 @@ class StreamService : LifecycleService() {
                 }
                 // keep reference so switch can rebind
                 this@StreamService.analysisUseCase = analysisUseCase
+                
+                // Create preview use case if surface provider is available
+                if (SharedSurfaceProvider.previewSurfaceProvider != null) {
+                    previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
+                        setSurfaceProvider(SharedSurfaceProvider.previewSurfaceProvider)
+                    }
+                }
 
                 try {
                     cameraProvider.unbindAll()
-                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    cameraProvider.bindToLifecycle(this@StreamService, selector, analysisUseCase)
-                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera")
+                    
+                    // Try to use the physical camera ID if available (for focal lengths)
+                    val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+                    
+                    val selector = if (physicalCameraId != null) {
+                        // Use custom selector for specific physical camera (includes focal length variants)
+                        buildCameraSelectorForId(physicalCameraId) ?: 
+                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                    } else {
+                        // Fallback to front/back if no physical ID found
+                        if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    }
+                    
+                    val useCases = mutableListOf<androidx.camera.core.UseCase>(analysisUseCase)
+                    previewUseCase?.let { useCases.add(it) }
+                    
+                    val camera = cameraProvider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                    
+                    // Store camera control for preview activity
+                    SharedSurfaceProvider.cameraControl = camera.cameraControl
+                    SharedSurfaceProvider.cameraInfo = camera.cameraInfo
+                    
+                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
+                    
+                    // Notify that camera is ready
+                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to bind camera use cases in service", e)
                 }
@@ -335,7 +385,14 @@ class StreamService : LifecycleService() {
         } catch (_: Exception) {}
         cameraProvider = null
         analysisUseCase = null
+        previewUseCase = null
         cameraExecutor = null
+        
+        // Clear shared surface references
+        SharedSurfaceProvider.previewSurface = null
+        SharedSurfaceProvider.previewSurfaceProvider = null
+        SharedSurfaceProvider.cameraControl = null
+        SharedSurfaceProvider.cameraInfo = null
 
         try {
             // stop and release encoder after camera surfaces are torn down
@@ -750,13 +807,24 @@ class StreamService : LifecycleService() {
                         }, cameraHandler)
 
                         builder.addTarget(surface)
-                        val targets = listOf(surface, ir.surface)
+                        val targets = mutableListOf(surface, ir.surface)
+                        SharedSurfaceProvider.previewSurface?.let { targets.add(it) }
+                        
                         camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 captureSession = session
                                 try {
-                                    session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                                    Log.i(TAG, "Camera2 session configured and repeating request started")
+                                    // Add all surfaces to the capture request
+                                    val reqBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                                    targets.forEach { reqBuilder.addTarget(it) }
+                                    reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                                    reqBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                    
+                                    session.setRepeatingRequest(reqBuilder.build(), null, cameraHandler)
+                                    Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
+                                    
+                                    // Notify that camera is ready
+                                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to start repeating request", e)
                                 }
@@ -824,6 +892,94 @@ class StreamService : LifecycleService() {
         return null
     }
 
+    private fun buildCameraSelectorForId(cameraId: String): CameraSelector? {
+        // For CameraX 1.1+, we can use addCameraFilter to select specific physical cameras
+        // by checking against Camera2 characteristics
+        return try {
+            val mgr = cameraManager ?: return null
+            val targetChars = mgr.getCameraCharacteristics(cameraId)
+            val targetFacing = targetChars.get(CameraCharacteristics.LENS_FACING)
+            val targetFocalLengths = targetChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.take(1)  // Just check the first focal length
+                ?.toList() ?: emptyList()
+            
+            Log.i(TAG, "Building selector for camera $cameraId with facing=$targetFacing, focal lengths=$targetFocalLengths")
+            
+            val selectorBuilder = CameraSelector.Builder()
+            
+            // First, require the correct facing direction
+            when (targetFacing) {
+                CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                else -> {} // Unknown facing
+            }
+            
+            // If we have focal length info, try to filter for matching focal length
+            if (targetFocalLengths.isNotEmpty()) {
+                selectorBuilder.addCameraFilter { availableCameras ->
+                    availableCameras.filter { cameraInfo ->
+                        try {
+                            // Try to match by inspecting if this camera has matching focal lengths
+                            // CameraX provides CameraInfo; we need to check its characteristics
+                            // In CameraX 1.5.1, we can use introspection to get Camera2 info
+                            
+                            // Get the Camera2 CameraCharacteristics through reflection if possible
+                            val cameraId2 = try {
+                                // Try to get camera ID from CameraInfo using reflection
+                                val getCameraIdMethod = cameraInfo.javaClass.getMethod("getCameraId")
+                                getCameraIdMethod.invoke(cameraInfo) as? String
+                            } catch (e: Exception) {
+                                null
+                            }
+                            
+                            if (cameraId2 != null) {
+                                // We got the camera ID - check if focal lengths match
+                                val chars2 = mgr.getCameraCharacteristics(cameraId2)
+                                val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                    ?.take(1)
+                                    ?.toList() ?: emptyList()
+                                
+                                // Match if we have similar focal lengths (with small tolerance for floating point)
+                                focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
+                                    focal2.any { f2 ->
+                                        kotlin.math.abs(f2 - targetFocal) < 0.1f
+                                    }
+                                }
+                            } else {
+                                // Can't get camera ID, include this camera (will match first)
+                                true
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error matching focal length in camera filter", e)
+                            true  // Include if we can't determine
+                        }
+                    }
+                }
+            }
+            
+            selectorBuilder.build()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to build custom CameraSelector for camera $cameraId, will use facing direction", e)
+            // Fallback to just using facing direction
+            try {
+                val mgr = cameraManager ?: return null
+                val chars = mgr.getCameraCharacteristics(cameraId)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                
+                val selectorBuilder = CameraSelector.Builder()
+                when (facing) {
+                    CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                    CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                    else -> {} // Unknown
+                }
+                selectorBuilder.build()
+            } catch (e2: Exception) {
+                Log.w(TAG, "Failed all attempts to build CameraSelector for $cameraId", e2)
+                null
+            }
+        }
+    }
+
     private fun handleCameraSwitchRequest(newCam: String) {
         // update stored selection
         if (newCam == selectedCamera) {
@@ -850,17 +1006,181 @@ class StreamService : LifecycleService() {
                         return@launch
                     }
                     provider.unbindAll()
-                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    val useCase = analysisUseCase ?: run {
-                        Log.w(TAG, "Analysis use case not available when switching camera")
-                        return@launch
+                    
+                    // Try to use the physical camera ID if available (for focal lengths)
+                    val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+                    
+                    val selector = if (physicalCameraId != null) {
+                        // Use custom selector for specific physical camera (includes focal length variants)
+                        buildCameraSelectorForId(physicalCameraId) ?: 
+                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                    } else {
+                        // Fallback to front/back if no physical ID found
+                        if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                     }
-                    provider.bindToLifecycle(this@StreamService, selector, useCase)
-                    Log.i(TAG, "Switched CameraX binding to $selectedCamera")
+                    
+                    val useCases = mutableListOf<androidx.camera.core.UseCase>()
+                    analysisUseCase?.let { useCases.add(it) }
+                    previewUseCase?.let { useCases.add(it) }
+                    
+                    if (useCases.isNotEmpty()) {
+                        provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                        Log.i(TAG, "Switched CameraX binding to $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to rebind CameraX for new camera", e)
                 }
             }
         }
     }
+    
+    private fun handlePreviewSurfaceUpdate(surfaceToken: String?) {
+        if (surfaceToken == null) {
+            // Remove preview
+            previewUseCase = null
+            SharedSurfaceProvider.previewSurfaceProvider = null
+            Log.i(TAG, "Preview surface removed")
+            
+            // For both modes, stop the preview use case
+            lifecycleScope.launch(Dispatchers.Main) {
+                try {
+                    cameraProvider?.unbindAll()
+                    // Rebind without preview for MJPEG mode
+                    if (!useAvc) {
+                        rebindCameraXUseCases()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error removing preview", e)
+                }
+            }
+        } else {
+            // Surface is being set by the preview activity via SharedSurfaceProvider
+            Log.i(TAG, "Preview surface registered: $surfaceToken")
+            
+            // For both modes, use CameraX Preview for the preview UI
+            // This works alongside Camera2 encoder for AVC mode
+            lifecycleScope.launch(Dispatchers.Main) {
+                try {
+                    val provider = SharedSurfaceProvider.previewSurfaceProvider
+                    if (provider != null) {
+                        previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
+                            setSurfaceProvider(provider)
+                        }
+                        
+                        // Only rebind for MJPEG mode (CameraX controls camera)
+                        // For AVC mode (Camera2 controls camera), just create the preview use case
+                        if (!useAvc) {
+                            rebindCameraXUseCases()
+                        } else {
+                            // For AVC mode, bind preview to a separate CameraX session for preview only
+                            bindPreviewOnly()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error setting up preview", e)
+                }
+            }
+        }
+    }
+    
+    private suspend fun bindPreviewOnly() {
+        try {
+            if (cameraProvider == null) {
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
+                cameraProvider = cameraProviderFuture.get()
+            }
+            
+            val provider = cameraProvider ?: return
+            val preview = previewUseCase ?: return
+            
+            provider.unbindAll()
+            val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+            val camera = provider.bindToLifecycle(this@StreamService, selector, preview)
+            
+            // Store camera control for preview activity
+            SharedSurfaceProvider.cameraControl = camera.cameraControl
+            SharedSurfaceProvider.cameraInfo = camera.cameraInfo
+            
+            Log.i(TAG, "Bound CameraX preview for Camera2/AVC mode")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bind preview-only CameraX", e)
+        }
+    }
+    
+    private fun reconfigureCamera2Session() {
+        val session = captureSession ?: return
+        val camera = cameraDevice ?: return
+        
+        try {
+            session.close()
+            
+            val surfaces = mutableListOf<Surface>()
+            encoderInputSurface?.let { surfaces.add(it) }
+            imageReader?.surface?.let { surfaces.add(it) }
+            SharedSurfaceProvider.previewSurface?.let { surfaces.add(it) }
+            
+            if (surfaces.isEmpty()) {
+                Log.w(TAG, "No surfaces for Camera2 reconfigure")
+                return
+            }
+            
+            camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(newSession: CameraCaptureSession) {
+                    captureSession = newSession
+                    try {
+                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        surfaces.forEach { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                        builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        
+                        newSession.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Camera2 session reconfigured with ${surfaces.size} surfaces")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to start repeating request after reconfigure", e)
+                    }
+                }
+                
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Log.e(TAG, "Camera2 session reconfigure failed")
+                }
+            }, cameraHandler)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reconfiguring Camera2 session", e)
+        }
+    }
+    
+    private suspend fun rebindCameraXUseCases() {
+        try {
+            val provider = cameraProvider ?: return
+            provider.unbindAll()
+            
+            val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+            val useCases = mutableListOf<androidx.camera.core.UseCase>()
+            
+            analysisUseCase?.let { useCases.add(it) }
+            previewUseCase?.let { useCases.add(it) }
+            
+            if (useCases.isNotEmpty()) {
+                provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                Log.i(TAG, "CameraX rebound with ${useCases.size} use cases")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to rebind CameraX", e)
+        }
+    }
+}
+
+// Shared surface provider for communication between service and activity
+object SharedSurfaceProvider {
+    @Volatile
+    var previewSurface: Surface? = null
+    
+    @Volatile
+    var previewSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null
+    
+    @Volatile
+    var cameraControl: androidx.camera.core.CameraControl? = null
+    
+    @Volatile
+    var cameraInfo: androidx.camera.core.CameraInfo? = null
 }

@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import android.content.Context
 import android.view.View
 import android.util.Size
+import androidx.camera.core.CameraControl
 
 private const val DEFAULT_PORT = 4747
 
@@ -65,7 +66,7 @@ class MainActivity : AppCompatActivity() {
             val height = b.getInt("height", 1080)
             val camera = b.getString("camera") ?: "back"
             val jpeg = b.getInt("jpegQuality", 85)
-            val fps = b.getInt("fps", 25)
+            val fps = b.getInt("fps", 50)
             val useAvc = b.getBoolean("useAvc", false)
 
             try {
@@ -306,7 +307,7 @@ class MainActivity : AppCompatActivity() {
         // Launch preview activity
         previewButton.setOnClickListener {
             // open preview without stopping the streaming service
-            startActivity(Intent(this, PreviewActivity::class.java))
+            startActivity(Intent(this, CameraControlActivity::class.java))
         }
         // initialize startButton from saved streaming state and register receiver
         val wasStreaming = prefs.getBoolean("isStreaming", false)

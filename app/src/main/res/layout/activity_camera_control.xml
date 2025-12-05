@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+    <!-- top-right compact controls: flash icon + camera selector -->
+    <LinearLayout
+        android:id="@+id/topControls"
+        android:orientation="horizontal"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="12dp"
+        android:gravity="end"
+        android:layout_gravity="top|end"
+        android:background="@android:color/transparent">
+
+        <ImageButton
+            android:id="@+id/flashBtn"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:scaleType="center"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Toggle flash"
+            android:src="@drawable/ic_flash" />
+
+        <Spinner
+            android:id="@+id/cameraSpinner"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:spinnerMode="dropdown" />
+
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/exposureLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal|top"
+        android:layout_marginTop="16dp"
+        android:padding="8dp"
+        android:background="#66000000"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:visibility="invisible"
+        android:text="EV: 0" />
+
+    <!-- focus ring shown when user taps to focus -->
+    <View
+        android:id="@+id/focusRing"
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:visibility="gone"
+        android:background="@drawable/focus_ring"
+        android:layout_gravity="top|start"
+        android:translationX="0dp"
+        android:translationY="0dp" />
+
+</FrameLayout>
