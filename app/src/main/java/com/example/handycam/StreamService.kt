@@ -263,6 +263,15 @@ class StreamService : LifecycleService() {
             }
         } else {
             // Start CameraX analysis to capture frames (MJPEG path)
+            // Initialize camera manager early so findCameraId and buildCameraSelectorForId can work
+            try {
+                if (cameraManager == null) {
+                    cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get CameraManager for MJPEG path", e)
+            }
+            
             lifecycleScope.launch(Dispatchers.Main) {
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
                 val cameraProvider = cameraProviderFuture.get()
@@ -291,7 +300,19 @@ class StreamService : LifecycleService() {
 
                 try {
                     cameraProvider.unbindAll()
-                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    
+                    // Try to use the physical camera ID if available (for focal lengths)
+                    val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+                    
+                    val selector = if (physicalCameraId != null) {
+                        // Use custom selector for specific physical camera (includes focal length variants)
+                        buildCameraSelectorForId(physicalCameraId) ?: 
+                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                    } else {
+                        // Fallback to front/back if no physical ID found
+                        if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    }
+                    
                     val useCases = mutableListOf<androidx.camera.core.UseCase>(analysisUseCase)
                     previewUseCase?.let { useCases.add(it) }
                     
@@ -301,7 +322,7 @@ class StreamService : LifecycleService() {
                     SharedSurfaceProvider.cameraControl = camera.cameraControl
                     SharedSurfaceProvider.cameraInfo = camera.cameraInfo
                     
-                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera with ${useCases.size} use cases")
+                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     
                     // Notify that camera is ready
                     sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
@@ -871,6 +892,94 @@ class StreamService : LifecycleService() {
         return null
     }
 
+    private fun buildCameraSelectorForId(cameraId: String): CameraSelector? {
+        // For CameraX 1.1+, we can use addCameraFilter to select specific physical cameras
+        // by checking against Camera2 characteristics
+        return try {
+            val mgr = cameraManager ?: return null
+            val targetChars = mgr.getCameraCharacteristics(cameraId)
+            val targetFacing = targetChars.get(CameraCharacteristics.LENS_FACING)
+            val targetFocalLengths = targetChars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.take(1)  // Just check the first focal length
+                ?.toList() ?: emptyList()
+            
+            Log.i(TAG, "Building selector for camera $cameraId with facing=$targetFacing, focal lengths=$targetFocalLengths")
+            
+            val selectorBuilder = CameraSelector.Builder()
+            
+            // First, require the correct facing direction
+            when (targetFacing) {
+                CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                else -> {} // Unknown facing
+            }
+            
+            // If we have focal length info, try to filter for matching focal length
+            if (targetFocalLengths.isNotEmpty()) {
+                selectorBuilder.addCameraFilter { availableCameras ->
+                    availableCameras.filter { cameraInfo ->
+                        try {
+                            // Try to match by inspecting if this camera has matching focal lengths
+                            // CameraX provides CameraInfo; we need to check its characteristics
+                            // In CameraX 1.5.1, we can use introspection to get Camera2 info
+                            
+                            // Get the Camera2 CameraCharacteristics through reflection if possible
+                            val cameraId2 = try {
+                                // Try to get camera ID from CameraInfo using reflection
+                                val getCameraIdMethod = cameraInfo.javaClass.getMethod("getCameraId")
+                                getCameraIdMethod.invoke(cameraInfo) as? String
+                            } catch (e: Exception) {
+                                null
+                            }
+                            
+                            if (cameraId2 != null) {
+                                // We got the camera ID - check if focal lengths match
+                                val chars2 = mgr.getCameraCharacteristics(cameraId2)
+                                val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                    ?.take(1)
+                                    ?.toList() ?: emptyList()
+                                
+                                // Match if we have similar focal lengths (with small tolerance for floating point)
+                                focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
+                                    focal2.any { f2 ->
+                                        kotlin.math.abs(f2 - targetFocal) < 0.1f
+                                    }
+                                }
+                            } else {
+                                // Can't get camera ID, include this camera (will match first)
+                                true
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error matching focal length in camera filter", e)
+                            true  // Include if we can't determine
+                        }
+                    }
+                }
+            }
+            
+            selectorBuilder.build()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to build custom CameraSelector for camera $cameraId, will use facing direction", e)
+            // Fallback to just using facing direction
+            try {
+                val mgr = cameraManager ?: return null
+                val chars = mgr.getCameraCharacteristics(cameraId)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                
+                val selectorBuilder = CameraSelector.Builder()
+                when (facing) {
+                    CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
+                    CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                    else -> {} // Unknown
+                }
+                selectorBuilder.build()
+            } catch (e2: Exception) {
+                Log.w(TAG, "Failed all attempts to build CameraSelector for $cameraId", e2)
+                null
+            }
+        }
+    }
+
     private fun handleCameraSwitchRequest(newCam: String) {
         // update stored selection
         if (newCam == selectedCamera) {
@@ -897,14 +1006,26 @@ class StreamService : LifecycleService() {
                         return@launch
                     }
                     provider.unbindAll()
-                    val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    
+                    // Try to use the physical camera ID if available (for focal lengths)
+                    val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+                    
+                    val selector = if (physicalCameraId != null) {
+                        // Use custom selector for specific physical camera (includes focal length variants)
+                        buildCameraSelectorForId(physicalCameraId) ?: 
+                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                    } else {
+                        // Fallback to front/back if no physical ID found
+                        if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    }
+                    
                     val useCases = mutableListOf<androidx.camera.core.UseCase>()
                     analysisUseCase?.let { useCases.add(it) }
                     previewUseCase?.let { useCases.add(it) }
                     
                     if (useCases.isNotEmpty()) {
                         provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
-                        Log.i(TAG, "Switched CameraX binding to $selectedCamera with ${useCases.size} use cases")
+                        Log.i(TAG, "Switched CameraX binding to $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to rebind CameraX for new camera", e)
