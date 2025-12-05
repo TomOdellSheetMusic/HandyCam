@@ -33,8 +33,7 @@
             android:name=".StreamService"
             android:exported="false"
             android:foregroundServiceType="camera" />
-        <activity android:name=".ControlsActivity" android:exported="false" />
-        <activity android:name=".PreviewActivity" android:exported="false" android:screenOrientation="sensorLandscape" />
+        <activity android:name=".CameraControlActivity" android:exported="false" />
     </application>
 
 </manifest>

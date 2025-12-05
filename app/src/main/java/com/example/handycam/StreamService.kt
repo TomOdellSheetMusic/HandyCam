@@ -100,7 +100,7 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 720 ) // phone is upright so width and height are swapped
+                val width = intent.getIntExtra("width", 1080 ) // phone is upright so width and height are swapped
                 val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
