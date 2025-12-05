@@ -12,7 +12,13 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
 Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
 
+## Tested with
+- Samsung S22 Android 15
+- Samsung S20 Android 12
+- Samsung A50 Android 11
+
 ## ToDo
 - Add Camera Controls
 - Add Wifi Discovery
 - Clean up Code
+- Stream Audio
