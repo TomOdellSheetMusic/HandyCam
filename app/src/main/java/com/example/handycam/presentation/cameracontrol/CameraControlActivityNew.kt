@@ -15,6 +15,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.handycam.R
+import com.example.handycam.SharedSurfaceProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -190,6 +191,8 @@ class CameraControlActivity : AppCompatActivity() {
         if (event.pointerCount > 1) {
             adjustingExposure = true
             exposureStartY = event.getY(0)
+            // snapshot current exposure index from CameraInfo if available
+            lastExposureIndex = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
         } else {
             // Show focus ring at touch location
             focusRing.visibility = View.VISIBLE
@@ -201,11 +204,28 @@ class CameraControlActivity : AppCompatActivity() {
     private fun handleTouchMove(event: MotionEvent) {
         if (adjustingExposure && event.pointerCount > 1) {
             val deltaY = exposureStartY - event.getY(0)
-            val steps = (deltaY / 50).toInt()
-            if (steps != lastExposureIndex) {
-                lastExposureIndex = steps
-                exposureLabel.text = "Exposure: $steps"
-                exposureLabel.visibility = View.VISIBLE
+            val height = previewView.height.coerceAtLeast(1)
+            // map deltaY to camera exposure compensation range
+            val range = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationRange
+            if (range != null) {
+                val span = range.upper - range.lower
+                if (span > 0) {
+                    val deltaIndex = ((deltaY / height) * span).toInt()
+                    val target = (lastExposureIndex + deltaIndex).coerceIn(range.lower, range.upper)
+                    try {
+                        SharedSurfaceProvider.cameraControl?.setExposureCompensationIndex(target)
+                        exposureLabel.text = "EV: $target"
+                        exposureLabel.visibility = View.VISIBLE
+                    } catch (e: Exception) {
+                        // Some implementations may return a Future; attempt best-effort
+                        try {
+                            val method = SharedSurfaceProvider.cameraControl?.javaClass?.getMethod("setExposureCompensationIndex", Integer::class.javaPrimitiveType)
+                            method?.invoke(SharedSurfaceProvider.cameraControl, target)
+                        } catch (_: Exception) {
+                            // ignore
+                        }
+                    }
+                }
             }
         }
     }
@@ -213,7 +233,8 @@ class CameraControlActivity : AppCompatActivity() {
     private fun handleTouchUp() {
         adjustingExposure = false
         focusRing.visibility = View.GONE
-        exposureLabel.visibility = View.GONE
+        // hide exposure label after a short delay for UX parity with original behavior
+        exposureLabel.postDelayed({ exposureLabel.visibility = View.INVISIBLE }, 800)
         lastExposureIndex = 0
         exposureStartY = 0f
     }
