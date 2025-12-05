@@ -1,11 +1,16 @@
 package com.example.handycam
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.MotionEvent
+import android.view.Surface
 import android.view.View
 import android.widget.ImageButton
 import android.widget.Spinner
@@ -18,7 +23,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.MeteringPointFactory
 import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.SurfaceRequest
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -37,20 +42,20 @@ class CameraControlActivity : AppCompatActivity() {
     private lateinit var focusRing: View
     private var cameraManager: android.hardware.camera2.CameraManager? = null
 
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var currentLensFacing = CameraSelector.LENS_FACING_BACK
-    private var cameraSelector: CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var cameraControl: androidx.camera.core.CameraControl? = null
     private var cameraInfo: androidx.camera.core.CameraInfo? = null
 
     private var adjustingExposure = false
     private var exposureStartY = 0f
     private var lastExposureIndex = 0
+    
+    private var cameraReadyReceiver: BroadcastReceiver? = null
+    private var useCameraX = false // Track which camera system is being used
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startCamera() else {
+        if (granted) setupPreview() else {
             Toast.makeText(this, "Camera permission required", Toast.LENGTH_SHORT).show()
             finish()
         }
@@ -69,13 +74,24 @@ class CameraControlActivity : AppCompatActivity() {
         try {
             cameraManager = getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
         } catch (_: Exception) {}
+        
+        // Check if streaming service is running to determine camera mode
+        val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+        val isStreaming = prefs.getBoolean("isStreaming", false)
+        useCameraX = prefs.getBoolean("useAvc", false).not() // CameraX for MJPEG, Camera2 for AVC
+        
+        if (!isStreaming) {
+            Toast.makeText(this, "Please start streaming first", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
 
         flashBtn.setOnClickListener {
-            cameraControl?.let { ctrl ->
+            SharedSurfaceProvider.cameraControl?.let { ctrl ->
                 // toggle torch
                 lifecycleScope.launch(Dispatchers.Main) {
                     try {
-                        val info = cameraInfo ?: return@launch
+                        val info = SharedSurfaceProvider.cameraInfo ?: return@launch
                         val torchState = info.torchState.value
                         val enable = torchState != androidx.camera.core.TorchState.ON
                         ctrl.enableTorch(enable)
@@ -112,14 +128,12 @@ class CameraControlActivity : AppCompatActivity() {
                     override fun onItemSelected(parent: android.widget.AdapterView<*>, view: View?, position: Int, id: Long) {
                         val camId = try { mgr.cameraIdList[position] } catch (_: Exception) { null }
                         if (camId != null) {
-                            // pick lens based on characteristics
-                            try {
-                                val chars = mgr.getCameraCharacteristics(camId)
-                                val facing = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
-                                currentLensFacing = if (facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
-                                cameraSelector = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
-                                bindCameraUseCases()
-                            } catch (_: Exception) {}
+                            // Tell the service to switch camera
+                            val intent = Intent(this@CameraControlActivity, StreamService::class.java).apply {
+                                action = "com.example.handycam.ACTION_SET_CAMERA"
+                                putExtra("camera", camId)
+                            }
+                            startService(intent)
                         }
                     }
                     override fun onNothingSelected(parent: android.widget.AdapterView<*>) {}
@@ -138,7 +152,7 @@ class CameraControlActivity : AppCompatActivity() {
                 adjustingExposure = true
                 exposureStartY = e.y
                 // snapshot current exposure index
-                lastExposureIndex = cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
+                lastExposureIndex = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
                 exposureLabel.visibility = View.VISIBLE
             }
         }
@@ -153,14 +167,14 @@ class CameraControlActivity : AppCompatActivity() {
                         val dy = exposureStartY - motion.y
                         val height = previewView.height.coerceAtLeast(1)
                         // map dy to exposure range
-                        val range = cameraInfo?.exposureState?.exposureCompensationRange
+                        val range = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationRange
                         if (range != null) {
                             val span = range.upper - range.lower
                             if (span > 0) {
                                 val deltaIndex = ((dy / height) * span).toInt()
                                 val target = (lastExposureIndex + deltaIndex).coerceIn(range.lower, range.upper)
                                 try {
-                                    cameraControl?.setExposureCompensationIndex(target)
+                                    SharedSurfaceProvider.cameraControl?.setExposureCompensationIndex(target)
                                     exposureLabel.text = "EV: $target"
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Failed setting exposure index", e)
@@ -178,60 +192,55 @@ class CameraControlActivity : AppCompatActivity() {
             }
             true
         }
+        
+        // Register receiver to know when camera is ready
+        cameraReadyReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                Log.i(TAG, "Camera ready signal received")
+                runOnUiThread {
+                    updateCameraControls()
+                }
+            }
+        }
+        registerReceiver(cameraReadyReceiver, IntentFilter("com.example.handycam.CAMERA_READY"), Context.RECEIVER_NOT_EXPORTED)
 
         // permission check
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        } else startCamera()
+        } else setupPreview()
     }
 
-    private fun startCamera() {
-        lifecycleScope.launch(Dispatchers.Main) {
-            try {
-                val providerFuture = ProcessCameraProvider.getInstance(this@CameraControlActivity)
-                cameraProvider = providerFuture.get()
-                cameraSelector = if (currentLensFacing == CameraSelector.LENS_FACING_BACK)
-                    CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
-                bindCameraUseCases()
-            } catch (e: Exception) {
-                Log.e(TAG, "CameraProvider init failed", e)
-                Toast.makeText(this@CameraControlActivity, "Unable to start camera", Toast.LENGTH_SHORT).show()
-                finish()
-            }
+    private fun setupPreview() {
+        // For both modes, provide surface provider to the service
+        // The service will handle Camera2 or CameraX appropriately
+        SharedSurfaceProvider.previewSurfaceProvider = previewView.surfaceProvider
+        
+        // Notify service to reconfigure with preview
+        val intent = Intent(this, StreamService::class.java).apply {
+            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            putExtra("surfaceToken", if (useCameraX) "camerax_preview" else "camera2_preview")
         }
+        startService(intent)
+        
+        Log.i(TAG, "Setup preview surface provider for ${if (useCameraX) "CameraX" else "Camera2"} mode")
+        
+        // Update controls with current camera state
+        updateCameraControls()
     }
-
-    private fun bindCameraUseCases() {
-        try {
-            val provider = cameraProvider ?: return
-            provider.unbindAll()
-
-            val preview = Preview.Builder().build()
-            preview.setSurfaceProvider(previewView.surfaceProvider)
-
-            val selector = cameraSelector
-            val camera = provider.bindToLifecycle(this, selector, preview)
-
-            cameraControl = camera.cameraControl
-            cameraInfo = camera.cameraInfo
-
-            // update UI initial state
-            cameraInfo?.let { info ->
-                val torchState = info.torchState.value
-                try {
-                    if (torchState == androidx.camera.core.TorchState.ON) {
-                        flashBtn.setImageResource(android.R.drawable.ic_menu_camera)
-                    } else {
-                        flashBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-                    }
-                } catch (_: Exception) {}
-                val ev = info.exposureState.exposureCompensationIndex
-                exposureLabel.text = "EV: $ev"
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "bindCameraUseCases failed", e)
-            Toast.makeText(this, "Camera bind failed", Toast.LENGTH_SHORT).show()
+    
+    private fun updateCameraControls() {
+        // Update UI with current camera state from shared provider
+        SharedSurfaceProvider.cameraInfo?.let { info ->
+            val torchState = info.torchState.value
+            try {
+                if (torchState == androidx.camera.core.TorchState.ON) {
+                    flashBtn.setImageResource(android.R.drawable.ic_menu_camera)
+                } else {
+                    flashBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+                }
+            } catch (_: Exception) {}
+            val ev = info.exposureState.exposureCompensationIndex
+            exposureLabel.text = "EV: $ev"
         }
     }
 
@@ -242,7 +251,7 @@ class CameraControlActivity : AppCompatActivity() {
             val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
                 .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
                 .build()
-            cameraControl?.startFocusAndMetering(action)
+            SharedSurfaceProvider.cameraControl?.startFocusAndMetering(action)
             // show focus ring at touch point
             try {
                 val ring = focusRing
@@ -277,6 +286,23 @@ class CameraControlActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try { cameraProvider?.unbindAll() } catch (_: Exception) {}
+        
+        // Clean up preview surface
+        if (useCameraX) {
+            SharedSurfaceProvider.previewSurfaceProvider = null
+        } else {
+            SharedSurfaceProvider.previewSurface = null
+        }
+        
+        // Notify service to remove preview
+        try {
+            val intent = Intent(this, StreamService::class.java).apply {
+                action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+                putExtra("surfaceToken", null as String?)
+            }
+            startService(intent)
+        } catch (_: Exception) {}
+        
+        try { cameraReadyReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
     }
 }
