@@ -22,3 +22,4 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Add Wifi Discovery
 - Clean up Code
 - Stream Audio
+- Remote Control Camera Settings
