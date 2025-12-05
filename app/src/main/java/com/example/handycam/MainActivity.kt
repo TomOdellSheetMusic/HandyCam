@@ -61,8 +61,8 @@ class MainActivity : AppCompatActivity() {
         if (camGranted && fgGranted && notifGranted) {
             val host = b.getString("host") ?: "0.0.0.0"
             val port = b.getInt("port", DEFAULT_PORT)
-            val width = b.getInt("width", 1280)
-            val height = b.getInt("height", 720)
+            val width = b.getInt("width", 1920)
+            val height = b.getInt("height", 1080)
             val camera = b.getString("camera") ?: "back"
             val jpeg = b.getInt("jpegQuality", 85)
             val fps = b.getInt("fps", 25)
@@ -106,7 +106,7 @@ class MainActivity : AppCompatActivity() {
         // defer camera display until we've populated the camera list; remember saved value
         val savedCamera = prefs.getString("camera", "back")
         // populate FPS spinner with common choices
-        val fpsChoices = listOf("15", "24", "30", "60")
+        val fpsChoices = listOf("15", "24", "30", "50", "60")
         val fpsAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, fpsChoices).also {
             it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
