@@ -18,8 +18,8 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Samsung A50 Android 11
 
 ## ToDo
-- Add Camera Controls
 - Add Wifi Discovery
 - Clean up Code
 - Stream Audio
 - Remote Control Camera Settings
+- Squash Bugs
