@@ -20,6 +20,7 @@ import io.ktor.server.routing.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.request.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -230,6 +231,18 @@ class KtorHttpsServerService : LifecycleService() {
                             <div class="endpoint">
                                 <strong>GET /health</strong> - Health check
                             </div>
+                            <div class="endpoint">
+                                <strong>GET /camera</strong> - Camera control web UI
+                            </div>
+                            <div class="endpoint">
+                                <strong>POST /api/camera/start</strong> - Start camera streaming
+                            </div>
+                            <div class="endpoint">
+                                <strong>POST /api/camera/stop</strong> - Stop camera streaming
+                            </div>
+                            <div class="endpoint">
+                                <strong>POST /api/camera/switch</strong> - Switch camera (body: {"camera": "back|front"})
+                            </div>
                         </div>
                     </body>
                     </html>
@@ -261,10 +274,255 @@ class KtorHttpsServerService : LifecycleService() {
             
             // Add custom routes here as needed
             get("/api/camera/status") {
+                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                val isStreaming = prefs.getBoolean("isStreaming", false)
                 call.respond(mapOf(
-                    "message" to "Camera status endpoint",
-                    "streaming" to false
+                    "streaming" to isStreaming,
+                    "port" to prefs.getInt("streamPort", 4747),
+                    "camera" to prefs.getString("camera", "back")
                 ))
+            }
+            
+            post("/api/camera/start") {
+                try {
+                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                        action = "com.example.handycam.ACTION_START"
+                        putExtra("host", "0.0.0.0")
+                        putExtra("port", 4747)
+                        putExtra("width", 1080)
+                        putExtra("height", 1920)
+                        putExtra("camera", "back")
+                        putExtra("jpegQuality", 85)
+                        putExtra("targetFps", 30)
+                        putExtra("useAvc", false)
+                    }
+                    startService(intent)
+                    call.respond(mapOf("success" to true, "message" to "Camera streaming started"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf(
+                        "success" to false,
+                        "message" to "Failed to start camera: ${e.message}"
+                    ))
+                }
+            }
+            
+            post("/api/camera/stop") {
+                try {
+                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                        action = "com.example.handycam.ACTION_STOP"
+                    }
+                    startService(intent)
+                    call.respond(mapOf("success" to true, "message" to "Camera streaming stopped"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf(
+                        "success" to false,
+                        "message" to "Failed to stop camera: ${e.message}"
+                    ))
+                }
+            }
+            
+            post("/api/camera/switch") {
+                try {
+                    val params = call.receive<Map<String, String>>()
+                    val camera = params["camera"] ?: "back"
+                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                        action = "com.example.handycam.ACTION_SET_CAMERA"
+                        putExtra("camera", camera)
+                    }
+                    startService(intent)
+                    call.respond(mapOf("success" to true, "message" to "Switched to $camera camera"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, mapOf(
+                        "success" to false,
+                        "message" to "Failed to switch camera: ${e.message}"
+                    ))
+                }
+            }
+            
+            get("/camera") {
+                call.respondText(
+                    """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>HandyCam Camera Control</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                        <style>
+                            body { 
+                                font-family: Arial, sans-serif; 
+                                margin: 0;
+                                padding: 20px;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                min-height: 100vh;
+                            }
+                            .container { 
+                                max-width: 600px;
+                                margin: 0 auto;
+                                background: white; 
+                                padding: 30px; 
+                                border-radius: 12px; 
+                                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                            }
+                            h1 { 
+                                color: #333;
+                                margin-top: 0;
+                                text-align: center;
+                            }
+                            .status {
+                                padding: 15px;
+                                border-radius: 8px;
+                                margin: 20px 0;
+                                text-align: center;
+                                font-weight: bold;
+                            }
+                            .status.active { background: #d4edda; color: #155724; }
+                            .status.inactive { background: #f8d7da; color: #721c24; }
+                            button {
+                                width: 100%;
+                                padding: 15px;
+                                margin: 10px 0;
+                                font-size: 16px;
+                                border: none;
+                                border-radius: 8px;
+                                cursor: pointer;
+                                font-weight: bold;
+                                transition: all 0.3s;
+                            }
+                            button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+                            button:active { transform: translateY(0); }
+                            .btn-start { background: #28a745; color: white; }
+                            .btn-stop { background: #dc3545; color: white; }
+                            .btn-switch { background: #007bff; color: white; }
+                            .btn-refresh { background: #6c757d; color: white; }
+                            .info {
+                                background: #f8f9fa;
+                                padding: 15px;
+                                border-radius: 8px;
+                                margin: 20px 0;
+                            }
+                            .info-item {
+                                display: flex;
+                                justify-content: space-between;
+                                margin: 8px 0;
+                                padding: 8px 0;
+                                border-bottom: 1px solid #dee2e6;
+                            }
+                            .info-item:last-child { border-bottom: none; }
+                            .label { font-weight: bold; color: #495057; }
+                            .value { color: #007bff; }
+                            .message {
+                                padding: 12px;
+                                border-radius: 8px;
+                                margin: 10px 0;
+                                display: none;
+                            }
+                            .message.success { background: #d4edda; color: #155724; display: block; }
+                            .message.error { background: #f8d7da; color: #721c24; display: block; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1>📹 Camera Control</h1>
+                            
+                            <div id="status" class="status inactive">Status: Checking...</div>
+                            
+                            <div id="message" class="message"></div>
+                            
+                            <div class="info" id="info" style="display:none;">
+                                <div class="info-item">
+                                    <span class="label">Stream Port:</span>
+                                    <span class="value" id="port">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="label">Current Camera:</span>
+                                    <span class="value" id="camera">-</span>
+                                </div>
+                            </div>
+                            
+                            <button class="btn-start" onclick="startCamera()">▶️ Start Camera Stream</button>
+                            <button class="btn-stop" onclick="stopCamera()">⏹️ Stop Camera Stream</button>
+                            <button class="btn-switch" onclick="switchCamera('back')">🔄 Switch to Back Camera</button>
+                            <button class="btn-switch" onclick="switchCamera('front')">🔄 Switch to Front Camera</button>
+                            <button class="btn-refresh" onclick="checkStatus()">🔄 Refresh Status</button>
+                        </div>
+                        
+                        <script>
+                            function showMessage(text, isSuccess) {
+                                const msg = document.getElementById('message');
+                                msg.textContent = text;
+                                msg.className = 'message ' + (isSuccess ? 'success' : 'error');
+                                setTimeout(() => msg.className = 'message', 3000);
+                            }
+                            
+                            async function checkStatus() {
+                                try {
+                                    const response = await fetch('/api/camera/status');
+                                    const data = await response.json();
+                                    
+                                    const statusEl = document.getElementById('status');
+                                    if (data.streaming) {
+                                        statusEl.textContent = '🟢 Camera is Streaming';
+                                        statusEl.className = 'status active';
+                                        document.getElementById('info').style.display = 'block';
+                                        document.getElementById('port').textContent = data.port;
+                                        document.getElementById('camera').textContent = data.camera;
+                                    } else {
+                                        statusEl.textContent = '🔴 Camera is Stopped';
+                                        statusEl.className = 'status inactive';
+                                        document.getElementById('info').style.display = 'none';
+                                    }
+                                } catch (e) {
+                                    showMessage('Failed to check status: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function startCamera() {
+                                try {
+                                    const response = await fetch('/api/camera/start', { method: 'POST' });
+                                    const data = await response.json();
+                                    showMessage(data.message, data.success);
+                                    if (data.success) setTimeout(checkStatus, 1000);
+                                } catch (e) {
+                                    showMessage('Failed to start camera: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function stopCamera() {
+                                try {
+                                    const response = await fetch('/api/camera/stop', { method: 'POST' });
+                                    const data = await response.json();
+                                    showMessage(data.message, data.success);
+                                    if (data.success) setTimeout(checkStatus, 1000);
+                                } catch (e) {
+                                    showMessage('Failed to stop camera: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function switchCamera(camera) {
+                                try {
+                                    const response = await fetch('/api/camera/switch', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ camera })
+                                    });
+                                    const data = await response.json();
+                                    showMessage(data.message, data.success);
+                                    if (data.success) setTimeout(checkStatus, 500);
+                                } catch (e) {
+                                    showMessage('Failed to switch camera: ' + e.message, false);
+                                }
+                            }
+                            
+                            // Check status on load
+                            checkStatus();
+                            // Auto-refresh every 5 seconds
+                            setInterval(checkStatus, 5000);
+                        </script>
+                    </body>
+                    </html>
+                    """.trimIndent(),
+                    ContentType.Text.Html
+                )
             }
         }
     }

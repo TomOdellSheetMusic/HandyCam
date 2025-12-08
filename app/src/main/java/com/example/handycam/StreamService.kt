@@ -115,6 +115,13 @@ class StreamService : LifecycleService() {
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
 
+                // Save streaming state to preferences
+                getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putInt("streamPort", port)
+                    .putString("camera", selectedCamera)
+                    .apply()
+                
                 try {
                     startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
                 } catch (se: SecurityException) {

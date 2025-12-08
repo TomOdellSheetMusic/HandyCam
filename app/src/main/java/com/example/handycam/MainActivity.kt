@@ -345,9 +345,11 @@ class MainActivity : AppCompatActivity() {
         httpsServerButton.setOnClickListener {
             if (isHttpsServerRunning) {
                 stopHttpsServer()
+                // Don't update UI here - let the broadcast receiver handle it
             } else {
                 val port = httpsPortEdit.text.toString().toIntOrNull() ?: 8443
                 startHttpsServer(port)
+                // Don't update UI here - let the broadcast receiver handle it
             }
         }
         
