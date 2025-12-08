@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Android 14+ foreground-only permission required when using camera from a foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-feature android:name="android.hardware.camera.any"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -34,6 +35,10 @@
             android:name=".StreamService"
             android:exported="false"
             android:foregroundServiceType="camera" />
+        <service
+            android:name=".KtorHttpsServerService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <activity
             android:name=".CameraControlActivity"
             android:exported="false"

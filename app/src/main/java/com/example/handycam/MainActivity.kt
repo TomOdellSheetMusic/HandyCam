@@ -44,8 +44,10 @@ class MainActivity : AppCompatActivity() {
 
     private var isStreaming = false
     private var streamStateReceiver: android.content.BroadcastReceiver? = null
+    private var httpsServerStateReceiver: android.content.BroadcastReceiver? = null
     private val PREFS = "handy_prefs"
     private var pendingStartBundle: android.os.Bundle? = null
+    private var isHttpsServerRunning = false
 
     private fun tryStartPendingIfPermsGranted() {
         val b = pendingStartBundle ?: return
@@ -97,6 +99,9 @@ class MainActivity : AppCompatActivity() {
         val fpsSpinner = findViewById<android.widget.Spinner>(R.id.fpsSpinner)
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
+        val httpsPortEdit = findViewById<EditText>(R.id.httpsPortEdit)
+        val httpsServerButton = findViewById<Button>(R.id.httpsServerButton)
+        val httpsServerStatus = findViewById<TextView>(R.id.httpsServerStatus)
 
         // load saved settings
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -325,11 +330,49 @@ class MainActivity : AppCompatActivity() {
         }
         // register as not exported to comply with Android 14+ receiver requirements
         registerReceiver(streamStateReceiver, android.content.IntentFilter("com.example.handycam.STREAM_STATE"), Context.RECEIVER_NOT_EXPORTED)
+        
+        // HTTPS Server controls
+        val httpsRunning = prefs.getBoolean("httpsServerRunning", false)
+        isHttpsServerRunning = httpsRunning
+        httpsServerButton.text = if (httpsRunning) "Stop HTTPS Server" else "Start HTTPS Server"
+        httpsServerStatus.text = if (httpsRunning) {
+            val port = prefs.getInt("httpsServerPort", 8443)
+            "Server running on port $port"
+        } else {
+            "Server stopped"
+        }
+        
+        httpsServerButton.setOnClickListener {
+            if (isHttpsServerRunning) {
+                stopHttpsServer()
+            } else {
+                val port = httpsPortEdit.text.toString().toIntOrNull() ?: 8443
+                startHttpsServer(port)
+            }
+        }
+        
+        httpsServerStateReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val running = intent?.getBooleanExtra("isRunning", false) ?: false
+                val port = intent?.getIntExtra("port", 8443) ?: 8443
+                runOnUiThread {
+                    isHttpsServerRunning = running
+                    httpsServerButton.text = if (running) "Stop HTTPS Server" else "Start HTTPS Server"
+                    httpsServerStatus.text = if (running) {
+                        "Server running on port $port\nAccess at: http://localhost:$port"
+                    } else {
+                        "Server stopped"
+                    }
+                }
+            }
+        }
+        registerReceiver(httpsServerStateReceiver, android.content.IntentFilter("com.example.handycam.HTTPS_SERVER_STATE"), Context.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { streamStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+        try { httpsServerStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
     }
 
     // preview binding moved to PreviewActivity
@@ -384,6 +427,21 @@ class MainActivity : AppCompatActivity() {
     private fun stopStreaming() {
         val intent = Intent(this, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_STOP"
+        }
+        startService(intent)
+    }
+    
+    private fun startHttpsServer(port: Int) {
+        val intent = Intent(this, KtorHttpsServerService::class.java).apply {
+            action = "com.example.handycam.ACTION_START_HTTPS_SERVER"
+            putExtra("port", port)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+    
+    private fun stopHttpsServer() {
+        val intent = Intent(this, KtorHttpsServerService::class.java).apply {
+            action = "com.example.handycam.ACTION_STOP_HTTPS_SERVER"
         }
         startService(intent)
     }
