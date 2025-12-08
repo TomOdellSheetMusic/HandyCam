@@ -26,9 +26,20 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.FileOutputStream
+import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.cert.Certificate
+import java.security.cert.X509Certificate
+import java.util.Date
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
+import javax.security.auth.x500.X500Principal
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.cert.X509v3CertificateBuilder
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
+import java.math.BigInteger
 
 private const val TAG = "KtorHttpsServerService"
 private const val CHANNEL_ID = "ktor_https_server"
@@ -145,33 +156,36 @@ class KtorHttpsServerService : LifecycleService() {
             try {
                 startTime = System.currentTimeMillis()
                 
-                // For HTTPS, we need a keystore with SSL certificate
-                // For development, we'll use HTTP or you can add your own certificate
-                val useHttps = false // Set to true when you have a proper keystore
+                // Generate a self-signed certificate for local HTTPS
+                // This is a "snakeoil" certificate for local use only
+                val keyStoreFile = File(filesDir, "keystore.jks")
+                val keyStore = loadOrCreateSelfSignedKeyStore(keyStoreFile)
                 
-                if (useHttps) {
-                    // HTTPS configuration (requires keystore)
-                    val keyStoreFile = File(filesDir, "keystore.jks")
-                    val keyStore = loadOrCreateKeyStore(keyStoreFile)
-                    
-                    val keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-                    keyManagerFactory.init(keyStore, "changeit".toCharArray())
-                    
-                    val sslContext = SSLContext.getInstance("TLS")
-                    sslContext.init(keyManagerFactory.keyManagers, null, null)
-                    
-                    server = embeddedServer(Netty, port = serverPort) {
+                val keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+                keyManagerFactory.init(keyStore, "changeit".toCharArray())
+                
+                val sslContext = SSLContext.getInstance("TLS")
+                sslContext.init(keyManagerFactory.keyManagers, null, null)
+                
+                // Create HTTPS server with self-signed certificate
+                val environment = applicationEngineEnvironment {
+                    module {
                         configureRouting()
-                    }.apply {
-                        start(wait = false)
                     }
-                } else {
-                    // HTTP server (simpler for development)
-                    server = embeddedServer(Netty, port = serverPort) {
-                        configureRouting()
-                    }.apply {
-                        start(wait = false)
+                    
+                    sslConnector(
+                        keyStore = keyStore,
+                        keyAlias = "handycam",
+                        keyStorePassword = { "changeit".toCharArray() },
+                        privateKeyPassword = { "changeit".toCharArray() }
+                    ) {
+                        port = serverPort
+                        keyStorePath = keyStoreFile
                     }
+                }
+                
+                server = embeddedServer(Netty, environment).apply {
+                    start(wait = false)
                 }
                 
                 isRunning = true
@@ -276,10 +290,11 @@ class KtorHttpsServerService : LifecycleService() {
             get("/api/camera/status") {
                 val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
                 val isStreaming = prefs.getBoolean("isStreaming", false)
+                val camera = prefs.getString("camera", "back") ?: "back"
                 call.respond(mapOf(
                     "streaming" to isStreaming,
-                    "port" to prefs.getInt("streamPort", 4747),
-                    "camera" to prefs.getString("camera", "back")
+                    "port" to prefs.getInt("port", 4747),
+                    "camera" to camera
                 ))
             }
             
@@ -527,22 +542,80 @@ class KtorHttpsServerService : LifecycleService() {
         }
     }
 
-    private fun loadOrCreateKeyStore(file: File): KeyStore {
+    private fun loadOrCreateSelfSignedKeyStore(file: File): KeyStore {
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        val password = "changeit".toCharArray()
         
         if (file.exists()) {
-            file.inputStream().use {
-                keyStore.load(it, "changeit".toCharArray())
+            try {
+                file.inputStream().use {
+                    keyStore.load(it, password)
+                }
+                // Verify the certificate exists
+                if (keyStore.containsAlias("handycam") && keyStore.getCertificate("handycam") != null) {
+                    Log.i(TAG, "Existing self-signed certificate loaded successfully")
+                    return keyStore
+                } else {
+                    Log.w(TAG, "Keystore exists but certificate is invalid, regenerating...")
+                    file.delete()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load existing keystore, regenerating...", e)
+                file.delete()
             }
-        } else {
-            // Create a new keystore
-            // Note: For production, you should generate a proper certificate
-            keyStore.load(null, "changeit".toCharArray())
+        }
+        
+        // Create a new keystore with a self-signed certificate
+        keyStore.load(null, password)
+        
+        try {
+            // Generate RSA key pair
+            val keyPairGenerator = KeyPairGenerator.getInstance("RSA")
+            keyPairGenerator.initialize(2048)
+            val keyPair = keyPairGenerator.generateKeyPair()
             
-            // Save the keystore
+            // Create self-signed certificate using BouncyCastle
+            val now = Date()
+            val notBefore = Date(now.time - 86400000L) // 1 day before
+            val notAfter = Date(now.time + 315360000000L) // 10 years after
+            
+            val issuer = X500Name("CN=localhost, OU=HandyCam, O=HandyCam, L=Local, ST=Local, C=US")
+            val subject = issuer // Self-signed
+            
+            val publicKeyInfo = SubjectPublicKeyInfo.getInstance(keyPair.public.encoded)
+            val serialNumber = BigInteger.valueOf(System.currentTimeMillis())
+            
+            val certBuilder = X509v3CertificateBuilder(
+                issuer,
+                serialNumber,
+                notBefore,
+                notAfter,
+                subject,
+                publicKeyInfo
+            )
+            
+            val signer = JcaContentSignerBuilder("SHA256WithRSAEncryption").build(keyPair.private)
+            val certificateHolder = certBuilder.build(signer)
+            val certificate = JcaX509CertificateConverter().getCertificate(certificateHolder)
+            
+            // Store the key and certificate in the keystore
+            keyStore.setKeyEntry(
+                "handycam",
+                keyPair.private,
+                password,
+                arrayOf<Certificate>(certificate)
+            )
+            
+            // Save the keystore to file
             FileOutputStream(file).use {
-                keyStore.store(it, "changeit".toCharArray())
+                keyStore.store(it, password)
             }
+            
+            Log.i(TAG, "Self-signed certificate created and stored successfully")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create self-signed certificate", e)
+            throw RuntimeException("Failed to create SSL certificate: ${e.message}", e)
         }
         
         return keyStore

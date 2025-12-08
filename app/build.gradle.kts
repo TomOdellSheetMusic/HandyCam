@@ -110,6 +110,10 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:2.3.7")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
     
+    // BouncyCastle for SSL certificate generation
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78")
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
