@@ -52,6 +52,8 @@ class CameraControlActivity : AppCompatActivity() {
     private var cameraReadyReceiver: BroadcastReceiver? = null
     private var useCameraX = false // Track which camera system is being used
 
+    private lateinit var settingsManager: SettingsManager
+
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -64,6 +66,16 @@ class CameraControlActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera_control)
+
+        settingsManager = SettingsManager.getInstance(this)
+
+        settingsManager.cameraSetting.observe(this) { cameraSetting ->
+            // Update UI or functionality based on camera setting
+        }
+
+        settingsManager.streamSetting.observe(this) { streamSetting ->
+            // Update UI or functionality based on stream setting
+        }
 
         previewView = findViewById(R.id.previewView)
         flashBtn = findViewById(R.id.flashBtn)

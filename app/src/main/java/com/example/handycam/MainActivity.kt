@@ -49,6 +49,8 @@ class MainActivity : AppCompatActivity() {
     private var pendingStartBundle: android.os.Bundle? = null
     private var isHttpsServerRunning = false
 
+    private lateinit var settingsManager: SettingsManager
+
     private fun tryStartPendingIfPermsGranted() {
         val b = pendingStartBundle ?: return
         // check permissions
@@ -85,6 +87,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        settingsManager = SettingsManager.getInstance(this)
+
+        settingsManager.cameraSetting.observe(this) { cameraSetting ->
+            // Update UI or functionality based on camera setting
+        }
+
+        settingsManager.streamSetting.observe(this) { streamSetting ->
+            // Update UI or functionality based on stream setting
+        }
 
         setContentView(R.layout.activity_main)
 
