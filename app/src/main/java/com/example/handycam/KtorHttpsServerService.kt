@@ -311,8 +311,8 @@ class KtorHttpsServerService : LifecycleService() {
                         action = "com.example.handycam.ACTION_START"
                         putExtra("host", settingsManager.host.value ?: "0.0.0.0")
                         putExtra("port", settingsManager.port.value ?: 4747)
-                        putExtra("width", settingsManager.width.value ?: 1080)
-                        putExtra("height", settingsManager.height.value ?: 1920)
+                        putExtra("width", settingsManager.width.value ?: 1920)
+                        putExtra("height", settingsManager.height.value ?: 1080)
                         putExtra("camera", settingsManager.camera.value ?: "back")
                         putExtra("jpegQuality", settingsManager.jpegQuality.value ?: 85)
                         putExtra("targetFps", settingsManager.fps.value ?: 30)

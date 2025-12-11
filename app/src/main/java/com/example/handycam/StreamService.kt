@@ -108,8 +108,8 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 1080 ) // phone is upright so width and height are swapped
-                val height = intent.getIntExtra("height", 1920)
+                val width = intent.getIntExtra("width", 1920)
+                val height = intent.getIntExtra("height", 1080)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
@@ -749,19 +749,25 @@ class StreamService : LifecycleService() {
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest by area
+                    // pick size that best matches requested aspect; fall back to nearest area
+                    val targetAspect = reqWidth.toDouble() / reqHeight
+                    val targetArea = reqWidth.toLong() * reqHeight.toLong()
                     var chosen = sizes[0]
-                    var bestDiff = Math.abs(chosen.width * chosen.height - reqWidth * reqHeight)
+                    var bestAspectDiff = kotlin.math.abs(chosen.width.toDouble() / chosen.height - targetAspect)
+                    var bestAreaDiff = kotlin.math.abs(chosen.width.toLong() * chosen.height.toLong() - targetArea)
                     for (s in sizes) {
                         if (s.width == reqWidth && s.height == reqHeight) {
                             chosen = s
-                            bestDiff = 0
+                            bestAspectDiff = 0.0
+                            bestAreaDiff = 0
                             break
                         }
-                        val diff = Math.abs(s.width * s.height - reqWidth * reqHeight)
-                        if (diff < bestDiff) {
-                            bestDiff = diff
+                        val aspectDiff = kotlin.math.abs(s.width.toDouble() / s.height - targetAspect)
+                        val areaDiff = kotlin.math.abs(s.width.toLong() * s.height.toLong() - targetArea)
+                        if (aspectDiff < bestAspectDiff - 1e-3 || (kotlin.math.abs(aspectDiff - bestAspectDiff) < 1e-3 && areaDiff < bestAreaDiff)) {
                             chosen = s
+                            bestAspectDiff = aspectDiff
+                            bestAreaDiff = areaDiff
                         }
                     }
                     chosenWidth = chosen.width

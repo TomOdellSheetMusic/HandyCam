@@ -29,10 +29,10 @@ class SettingsManager private constructor(context: Context) {
     private val _port = MutableLiveData<Int>(4747)
     val port: LiveData<Int> get() = _port
 
-    private val _width = MutableLiveData<Int>(1080)
+    private val _width = MutableLiveData<Int>(1920)
     val width: LiveData<Int> get() = _width
 
-    private val _height = MutableLiveData<Int>(1920)
+    private val _height = MutableLiveData<Int>(1080)
     val height: LiveData<Int> get() = _height
 
     private val _fps = MutableLiveData<Int>(30)
