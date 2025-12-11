@@ -56,6 +56,7 @@ class KtorHttpsServerService : LifecycleService() {
     private var server: NettyApplicationEngine? = null
     private var serverPort = 8443
     private var isRunning = false
+    private lateinit var settingsManager: SettingsManager
     
     @Serializable
     data class ServerStatus(
@@ -76,6 +77,7 @@ class KtorHttpsServerService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        settingsManager = SettingsManager.getInstance(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -288,13 +290,18 @@ class KtorHttpsServerService : LifecycleService() {
             
             // Add custom routes here as needed
             get("/api/camera/status") {
-                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-                val isStreaming = prefs.getBoolean("isStreaming", false)
-                val camera = prefs.getString("camera", "back") ?: "back"
                 call.respond(mapOf(
-                    "streaming" to isStreaming,
-                    "port" to prefs.getInt("port", 4747),
-                    "camera" to camera
+                    "streaming" to (settingsManager.isStreaming.value ?: false),
+                    "port" to (settingsManager.port.value ?: 4747),
+                    "camera" to (settingsManager.camera.value ?: "back"),
+                    "width" to (settingsManager.width.value ?: 1080),
+                    "height" to (settingsManager.height.value ?: 1920),
+                    "fps" to (settingsManager.fps.value ?: 30),
+                    "jpegQuality" to (settingsManager.jpegQuality.value ?: 85),
+                    "useAvc" to (settingsManager.useAvc.value ?: false),
+                    "torchEnabled" to (settingsManager.torchEnabled.value ?: false),
+                    "autoFocus" to (settingsManager.autoFocus.value ?: true),
+                    "exposure" to (settingsManager.exposure.value ?: 0)
                 ))
             }
             
@@ -302,16 +309,17 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_START"
-                        putExtra("host", "0.0.0.0")
-                        putExtra("port", 4747)
-                        putExtra("width", 1080)
-                        putExtra("height", 1920)
-                        putExtra("camera", "back")
-                        putExtra("jpegQuality", 85)
-                        putExtra("targetFps", 30)
-                        putExtra("useAvc", false)
+                        putExtra("host", settingsManager.host.value ?: "0.0.0.0")
+                        putExtra("port", settingsManager.port.value ?: 4747)
+                        putExtra("width", settingsManager.width.value ?: 1080)
+                        putExtra("height", settingsManager.height.value ?: 1920)
+                        putExtra("camera", settingsManager.camera.value ?: "back")
+                        putExtra("jpegQuality", settingsManager.jpegQuality.value ?: 85)
+                        putExtra("targetFps", settingsManager.fps.value ?: 30)
+                        putExtra("useAvc", settingsManager.useAvc.value ?: false)
                     }
                     startService(intent)
+                    settingsManager.setStreaming(true)
                     call.respond(mapOf("success" to true, "message" to "Camera streaming started"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, mapOf(
@@ -327,6 +335,7 @@ class KtorHttpsServerService : LifecycleService() {
                         action = "com.example.handycam.ACTION_STOP"
                     }
                     startService(intent)
+                    settingsManager.setStreaming(false)
                     call.respond(mapOf("success" to true, "message" to "Camera streaming stopped"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, mapOf(
@@ -345,6 +354,7 @@ class KtorHttpsServerService : LifecycleService() {
                         putExtra("camera", camera)
                     }
                     startService(intent)
+                    settingsManager.setCamera(camera)
                     call.respond(mapOf("success" to true, "message" to "Switched to $camera camera"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, mapOf(
@@ -353,7 +363,108 @@ class KtorHttpsServerService : LifecycleService() {
                     ))
                 }
             }
-            
+
+            // New endpoints for all controls
+            post("/api/settings/fps") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val fps = params["fps"] ?: 30
+                    settingsManager.setFps(fps)
+                    call.respond(mapOf("success" to true, "message" to "FPS updated to $fps"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Invalid FPS value: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/resolution") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val width = params["width"] ?: 1080
+                    val height = params["height"] ?: 1920
+                    settingsManager.setWidth(width)
+                    settingsManager.setHeight(height)
+                    call.respond(mapOf("success" to true, "message" to "Resolution updated to ${width}x${height}"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Invalid resolution: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/jpeg-quality") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val quality = params["quality"] ?: 85
+                    settingsManager.setJpegQuality(quality)
+                    call.respond(mapOf("success" to true, "message" to "JPEG quality updated to $quality"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Invalid JPEG quality: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/torch") {
+                try {
+                    val params = call.receive<Map<String, Boolean>>()
+                    val enabled = params["enabled"] ?: false
+                    settingsManager.setTorchEnabled(enabled)
+                    call.respond(mapOf("success" to true, "message" to "Torch ${if (enabled) "enabled" else "disabled"}"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Failed to set torch: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/auto-focus") {
+                try {
+                    val params = call.receive<Map<String, Boolean>>()
+                    val enabled = params["enabled"] ?: true
+                    settingsManager.setAutoFocus(enabled)
+                    call.respond(mapOf("success" to true, "message" to "Auto focus ${if (enabled) "enabled" else "disabled"}"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Failed to set auto focus: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/exposure") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val exposure = params["exposure"] ?: 0
+                    settingsManager.setExposure(exposure)
+                    call.respond(mapOf("success" to true, "message" to "Exposure updated to $exposure"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Invalid exposure value: ${e.message}"
+                    ))
+                }
+            }
+
+            post("/api/settings/port") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val port = params["port"] ?: 4747
+                    settingsManager.setPort(port)
+                    call.respond(mapOf("success" to true, "message" to "Port updated to $port"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "success" to false,
+                        "message" to "Invalid port: ${e.message}"
+                    ))
+                }
+            }
+
             get("/camera") {
                 call.respondText(
                     """
@@ -433,6 +544,48 @@ class KtorHttpsServerService : LifecycleService() {
                             }
                             .message.success { background: #d4edda; color: #155724; display: block; }
                             .message.error { background: #f8d7da; color: #721c24; display: block; }
+                            .control-group {
+                                background: #f8f9fa;
+                                padding: 15px;
+                                border-radius: 8px;
+                                margin: 15px 0;
+                            }
+                            .control-label {
+                                font-weight: bold;
+                                color: #495057;
+                                margin-bottom: 8px;
+                                display: flex;
+                                justify-content: space-between;
+                            }
+                            input[type="range"] {
+                                width: 100%;
+                                height: 6px;
+                                border-radius: 3px;
+                                cursor: pointer;
+                            }
+                            input[type="number"] {
+                                width: 100%;
+                                padding: 8px;
+                                border: 1px solid #dee2e6;
+                                border-radius: 4px;
+                                font-size: 14px;
+                            }
+                            .toggle-btn {
+                                width: 100%;
+                                padding: 10px;
+                                margin: 8px 0;
+                                border: 2px solid #007bff;
+                                background: white;
+                                color: #007bff;
+                                border-radius: 6px;
+                                cursor: pointer;
+                                font-weight: bold;
+                                transition: all 0.3s;
+                            }
+                            .toggle-btn.active {
+                                background: #007bff;
+                                color: white;
+                            }
                         </style>
                     </head>
                     <body>
@@ -452,16 +605,62 @@ class KtorHttpsServerService : LifecycleService() {
                                     <span class="label">Current Camera:</span>
                                     <span class="value" id="camera">-</span>
                                 </div>
+                                <div class="info-item">
+                                    <span class="label">Resolution:</span>
+                                    <span class="value" id="resolution">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="label">FPS:</span>
+                                    <span class="value" id="fps">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="label">JPEG Quality:</span>
+                                    <span class="value" id="jpegQuality">-</span>
+                                </div>
                             </div>
                             
                             <button class="btn-start" onclick="startCamera()">▶️ Start Camera Stream</button>
                             <button class="btn-stop" onclick="stopCamera()">⏹️ Stop Camera Stream</button>
-                            <button class="btn-switch" onclick="switchCamera('back')">🔄 Switch to Back Camera</button>
-                            <button class="btn-switch" onclick="switchCamera('front')">🔄 Switch to Front Camera</button>
+                            
+                            <div class="control-group">
+                                <div class="control-label">Camera Selection</div>
+                                <button class="toggle-btn" onclick="switchCamera('back')">🔄 Back Camera</button>
+                                <button class="toggle-btn" onclick="switchCamera('front')">🔄 Front Camera</button>
+                            </div>
+                            
+                            <div class="control-group">
+                                <div class="control-label">
+                                    <span>FPS: <span id="fpsValue">30</span></span>
+                                </div>
+                                <input type="range" id="fpsSlider" min="15" max="60" value="30" onchange="setFps(this.value)">
+                            </div>
+                            
+                            <div class="control-group">
+                                <div class="control-label">
+                                    <span>JPEG Quality: <span id="jpegValue">85</span>%</span>
+                                </div>
+                                <input type="range" id="jpegSlider" min="50" max="100" value="85" onchange="setJpegQuality(this.value)">
+                            </div>
+                            
+                            <div class="control-group">
+                                <div class="control-label">
+                                    <span>Exposure: <span id="exposureValue">0</span></span>
+                                </div>
+                                <input type="range" id="exposureSlider" min="-50" max="50" value="0" onchange="setExposure(this.value)">
+                            </div>
+                            
+                            <div class="control-group">
+                                <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">💡 Torch: OFF</button>
+                                <button class="toggle-btn" id="autoFocusBtn" onclick="toggleAutoFocus()">🎯 Auto Focus: ON</button>
+                            </div>
+                            
                             <button class="btn-refresh" onclick="checkStatus()">🔄 Refresh Status</button>
                         </div>
                         
                         <script>
+                            let torchEnabled = false;
+                            let autoFocusEnabled = true;
+                            
                             function showMessage(text, isSuccess) {
                                 const msg = document.getElementById('message');
                                 msg.textContent = text;
@@ -481,6 +680,22 @@ class KtorHttpsServerService : LifecycleService() {
                                         document.getElementById('info').style.display = 'block';
                                         document.getElementById('port').textContent = data.port;
                                         document.getElementById('camera').textContent = data.camera;
+                                        document.getElementById('resolution').textContent = data.width + 'x' + data.height;
+                                        document.getElementById('fps').textContent = data.fps;
+                                        document.getElementById('jpegQuality').textContent = data.jpegQuality + '%';
+                                        
+                                        // Update sliders
+                                        document.getElementById('fpsSlider').value = data.fps;
+                                        document.getElementById('fpsValue').textContent = data.fps;
+                                        document.getElementById('jpegSlider').value = data.jpegQuality;
+                                        document.getElementById('jpegValue').textContent = data.jpegQuality;
+                                        document.getElementById('exposureSlider').value = data.exposure;
+                                        document.getElementById('exposureValue').textContent = data.exposure;
+                                        
+                                        // Update toggle buttons
+                                        torchEnabled = data.torchEnabled || false;
+                                        autoFocusEnabled = data.autoFocus !== false;
+                                        updateToggleButtons();
                                     } else {
                                         statusEl.textContent = '🔴 Camera is Stopped';
                                         statusEl.className = 'status inactive';
@@ -488,6 +703,27 @@ class KtorHttpsServerService : LifecycleService() {
                                     }
                                 } catch (e) {
                                     showMessage('Failed to check status: ' + e.message, false);
+                                }
+                            }
+                            
+                            function updateToggleButtons() {
+                                const torchBtn = document.getElementById('torchBtn');
+                                const autoFocusBtn = document.getElementById('autoFocusBtn');
+                                
+                                if (torchEnabled) {
+                                    torchBtn.textContent = '💡 Torch: ON';
+                                    torchBtn.classList.add('active');
+                                } else {
+                                    torchBtn.textContent = '💡 Torch: OFF';
+                                    torchBtn.classList.remove('active');
+                                }
+                                
+                                if (autoFocusEnabled) {
+                                    autoFocusBtn.textContent = '🎯 Auto Focus: ON';
+                                    autoFocusBtn.classList.add('active');
+                                } else {
+                                    autoFocusBtn.textContent = '🎯 Auto Focus: OFF';
+                                    autoFocusBtn.classList.remove('active');
                                 }
                             }
                             
@@ -525,6 +761,97 @@ class KtorHttpsServerService : LifecycleService() {
                                     if (data.success) setTimeout(checkStatus, 500);
                                 } catch (e) {
                                     showMessage('Failed to switch camera: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function setFps(fps) {
+                                document.getElementById('fpsValue').textContent = fps;
+                                try {
+                                    const response = await fetch('/api/settings/fps', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ fps: parseInt(fps) })
+                                    });
+                                    const data = await response.json();
+                                    if (!data.success) showMessage(data.message, false);
+                                } catch (e) {
+                                    showMessage('Failed to set FPS: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function setJpegQuality(quality) {
+                                document.getElementById('jpegValue').textContent = quality;
+                                try {
+                                    const response = await fetch('/api/settings/jpeg-quality', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ quality: parseInt(quality) })
+                                    });
+                                    const data = await response.json();
+                                    if (!data.success) showMessage(data.message, false);
+                                } catch (e) {
+                                    showMessage('Failed to set JPEG quality: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function setExposure(exposure) {
+                                document.getElementById('exposureValue').textContent = exposure;
+                                try {
+                                    const response = await fetch('/api/settings/exposure', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ exposure: parseInt(exposure) })
+                                    });
+                                    const data = await response.json();
+                                    if (!data.success) showMessage(data.message, false);
+                                } catch (e) {
+                                    showMessage('Failed to set exposure: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function toggleTorch() {
+                                torchEnabled = !torchEnabled;
+                                try {
+                                    const response = await fetch('/api/settings/torch', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ enabled: torchEnabled })
+                                    });
+                                    const data = await response.json();
+                                    if (data.success) {
+                                        updateToggleButtons();
+                                    } else {
+                                        torchEnabled = !torchEnabled;
+                                        updateToggleButtons();
+                                        showMessage(data.message, false);
+                                    }
+                                } catch (e) {
+                                    torchEnabled = !torchEnabled;
+                                    updateToggleButtons();
+                                    showMessage('Failed to toggle torch: ' + e.message, false);
+                                }
+                            }
+                            
+                            async function toggleAutoFocus() {
+                                autoFocusEnabled = !autoFocusEnabled;
+                                try {
+                                    const response = await fetch('/api/settings/auto-focus', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ enabled: autoFocusEnabled })
+                                    });
+                                    const data = await response.json();
+                                    if (data.success) {
+                                        updateToggleButtons();
+                                    } else {
+                                        autoFocusEnabled = !autoFocusEnabled;
+                                        updateToggleButtons();
+                                        showMessage(data.message, false);
+                                    }
+                                } catch (e) {
+                                    autoFocusEnabled = !autoFocusEnabled;
+                                    updateToggleButtons();
+                                    showMessage('Failed to toggle auto focus: ' + e.message, false);
                                 }
                             }
                             
@@ -635,6 +962,7 @@ class KtorHttpsServerService : LifecycleService() {
 
     private fun broadcastServerState(running: Boolean) {
         val intent = Intent("com.example.handycam.HTTPS_SERVER_STATE").apply {
+                setPackage(packageName)
             putExtra("isRunning", running)
             putExtra("port", serverPort)
         }

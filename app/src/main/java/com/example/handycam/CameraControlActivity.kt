@@ -69,12 +69,29 @@ class CameraControlActivity : AppCompatActivity() {
 
         settingsManager = SettingsManager.getInstance(this)
 
-        settingsManager.cameraSetting.observe(this) { cameraSetting ->
-            // Update UI or functionality based on camera setting
+        // Setup observers for settings manager
+        settingsManager.isStreaming.observe(this) { streaming ->
+            if (!streaming) {
+                finish()
+            }
         }
 
-        settingsManager.streamSetting.observe(this) { streamSetting ->
-            // Update UI or functionality based on stream setting
+        settingsManager.torchEnabled.observe(this) { torchEnabled ->
+            // Handle torch changes
+        }
+
+        settingsManager.autoFocus.observe(this) { autoFocus ->
+            // Handle auto focus changes
+        }
+
+        settingsManager.exposure.observe(this) { exposure ->
+            runOnUiThread {
+                exposureLabel.text = "Exposure: $exposure"
+            }
+        }
+
+        settingsManager.camera.observe(this) { camera ->
+            // Handle camera switching
         }
 
         previewView = findViewById(R.id.previewView)

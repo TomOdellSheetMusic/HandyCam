@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     private val PREFS = "handy_prefs"
     private var pendingStartBundle: android.os.Bundle? = null
     private var isHttpsServerRunning = false
-
+    private var pagerAdapter: SettingsPagerAdapter? = null
     private lateinit var settingsManager: SettingsManager
 
     private fun tryStartPendingIfPermsGranted() {
@@ -90,15 +90,73 @@ class MainActivity : AppCompatActivity() {
 
         settingsManager = SettingsManager.getInstance(this)
 
-        settingsManager.cameraSetting.observe(this) { cameraSetting ->
-            // Update UI or functionality based on camera setting
-        }
-
-        settingsManager.streamSetting.observe(this) { streamSetting ->
-            // Update UI or functionality based on stream setting
-        }
-
         setContentView(R.layout.activity_main)
+
+        // Setup observers for settings manager
+        settingsManager.isStreaming.observe(this) { streaming ->
+            runOnUiThread {
+                try {
+                    val btn = findViewById<Button>(R.id.startButton)
+                    btn.text = if (streaming) "Stop Server" else "Start Server"
+                    isStreaming = streaming
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.camera.observe(this) { camera ->
+            runOnUiThread {
+                try {
+                    val cameraEdit = findViewById<EditText>(R.id.cameraEdit)
+                    cameraEdit.setText(camera)
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.port.observe(this) { port ->
+            runOnUiThread {
+                try {
+                    val portEdit = findViewById<EditText>(R.id.portEdit)
+                    if (portEdit.text.toString().toIntOrNull() != port) {
+                        portEdit.setText(port.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.width.observe(this) { width ->
+            runOnUiThread {
+                try {
+                    val widthEdit = findViewById<EditText>(R.id.widthEdit)
+                    if (widthEdit.text.toString().toIntOrNull() != width) {
+                        widthEdit.setText(width.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.height.observe(this) { height ->
+            runOnUiThread {
+                try {
+                    val heightEdit = findViewById<EditText>(R.id.heightEdit)
+                    if (heightEdit.text.toString().toIntOrNull() != height) {
+                        heightEdit.setText(height.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.fps.observe(this) { fps ->
+            runOnUiThread {
+                try {
+                    val fpsSpinner = findViewById<android.widget.Spinner>(R.id.fpsSpinner)
+                    val fpsChoices = listOf("15", "24", "30", "50", "60")
+                    val index = fpsChoices.indexOf(fps.toString())
+                    if (index >= 0 && fpsSpinner.selectedItemPosition != index) {
+                        fpsSpinner.setSelection(index)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
 
         val hostEdit = findViewById<EditText>(R.id.hostEdit)
         val portEdit = findViewById<EditText>(R.id.portEdit)
@@ -242,7 +300,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
 
         // setup tabs + pager
-        val pagerAdapter = SettingsPagerAdapter(this)
+        pagerAdapter = SettingsPagerAdapter(this)
         settingsPager.adapter = pagerAdapter
         com.google.android.material.tabs.TabLayoutMediator(settingsTabs, settingsPager) { tab, position ->
             tab.text = if (position == 0) "MJPEG" else "AVC"
@@ -272,13 +330,23 @@ class MainActivity : AppCompatActivity() {
             val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 25
 
             // read codec-specific settings from fragments
-            val mjpegQuality = pagerAdapter.getMjpegFragment().getJpegQuality()
-            val avcBitrateMbps = pagerAdapter.getAvcFragment().getBitrateMbps()
+            val mjpegQuality = pagerAdapter?.getMjpegFragment()?.getJpegQuality() ?: 85
+            val avcBitrateMbps = pagerAdapter?.getAvcFragment()?.getBitrateMbps()
 
             // determine which codec tab is selected
             val useAvc = settingsTabs.selectedTabPosition == 1
 
             val jpeg = mjpegQuality
+
+            // Update settings manager
+            settingsManager.setHost(host)
+            settingsManager.setPort(port)
+            settingsManager.setWidth(width)
+            settingsManager.setHeight(height)
+            settingsManager.setCamera(camera)
+            settingsManager.setJpegQuality(jpeg)
+            settingsManager.setFps(fps)
+            settingsManager.setUseAvc(useAvc)
 
             // save current settings to prefs
             try {
@@ -312,11 +380,13 @@ class MainActivity : AppCompatActivity() {
                     // optimistic UI update; service will also broadcast state
                     isStreaming = true
                     startButton.text = "Stop Server"
+                    settingsManager.setStreaming(true)
                 }
             } else {
                 stopStreaming()
                 startButton.text = "Start Server"
                 isStreaming = false
+                settingsManager.setStreaming(false)
                 pendingStartBundle = null
             }
         }

@@ -94,10 +94,12 @@ class StreamService : LifecycleService() {
     @Volatile
     private var previewSurface: Surface? = null
     private var previewUseCase: androidx.camera.core.Preview? = null
+    private lateinit var settingsManager: SettingsManager
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        settingsManager = SettingsManager.getInstance(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -114,6 +116,17 @@ class StreamService : LifecycleService() {
                 useAvc = intent.getBooleanExtra("useAvc", false)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
+
+                // Update settings manager
+                settingsManager.setStreaming(true)
+                settingsManager.setCamera(selectedCamera)
+                settingsManager.setPort(port)
+                settingsManager.setWidth(width)
+                settingsManager.setHeight(height)
+                settingsManager.setJpegQuality(jpegQuality)
+                settingsManager.setFps(targetFps)
+                settingsManager.setUseAvc(useAvc)
+                settingsManager.setHost(host)
 
                 // Save streaming state to preferences
                 getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
@@ -142,6 +155,7 @@ class StreamService : LifecycleService() {
                 val newCam = intent.getStringExtra("camera") ?: ""
                 if (newCam.isNotBlank()) {
                     Log.i(TAG, "Received camera switch request -> $newCam")
+                    settingsManager.setCamera(newCam)
                     // perform camera switch while streaming
                     try {
                         handleCameraSwitchRequest(newCam)
@@ -156,6 +170,7 @@ class StreamService : LifecycleService() {
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
             ACTION_STOP -> {
+                settingsManager.setStreaming(false)
                 stopStreaming()
                 stopForeground(true)
                 stopSelf()
@@ -223,6 +238,7 @@ class StreamService : LifecycleService() {
     }
     private fun notifyStreamingState(isStreaming: Boolean) {
         val intent = Intent("com.example.handycam.STREAM_STATE").apply {
+                setPackage(packageName)
             putExtra("isStreaming", isStreaming)
         }
         sendBroadcast(intent)
@@ -332,7 +348,7 @@ class StreamService : LifecycleService() {
                     Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     
                     // Notify that camera is ready
-                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
+                        sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to bind camera use cases in service", e)
                 }
@@ -831,7 +847,7 @@ class StreamService : LifecycleService() {
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
                                     
                                     // Notify that camera is ready
-                                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
+                                        sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to start repeating request", e)
                                 }
