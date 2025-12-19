@@ -192,8 +192,8 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         hostEdit.setText(prefs.getString("host", "0.0.0.0"))
         portEdit.setText(prefs.getInt("port", DEFAULT_PORT).toString())
-        widthEdit.setText(prefs.getInt("width", 1920).toString())
-        heightEdit.setText(prefs.getInt("height", 1080).toString())
+        widthEdit.setText(prefs.getInt("width", 1080).toString())
+        heightEdit.setText(prefs.getInt("height", 1920).toString())
         // defer camera display until we've populated the camera list; remember saved value
         val savedCamera = prefs.getString("camera", "back")
         // populate FPS spinner with common choices
@@ -342,7 +342,7 @@ class MainActivity : AppCompatActivity() {
             val width = widthEdit.text.toString().toIntOrNull() ?: 1920
             val height = heightEdit.text.toString().toIntOrNull() ?: 1080
             val camera = (cameraEdit.tag as? String) ?: cameraEdit.text.toString().ifBlank { "back" }
-            val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 25
+            val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 60
 
             // read codec-specific settings from fragments
             val mjpegQuality = pagerAdapter?.getMjpegFragment()?.getJpegQuality() ?: 85

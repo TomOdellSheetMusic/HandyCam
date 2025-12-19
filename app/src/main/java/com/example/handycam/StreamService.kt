@@ -82,6 +82,9 @@ class StreamService : LifecycleService() {
     private var cameraHandler: Handler? = null
     private var encoderInputSurface: Surface? = null
     private var encoderOutputThread: Thread? = null
+    private val encoderOutputLock = Object()
+    @Volatile
+    private var encoderOutputRunning = false
     private var imageReader: android.media.ImageReader? = null
     private var encoderWidth: Int = 0
     private var encoderHeight: Int = 0
@@ -421,7 +424,7 @@ class StreamService : LifecycleService() {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
             // camera output size and call setupEncoder(...) with a compatible size.
             try {
-                startCamera2ToEncoder(height, width, targetFps)
+                startCamera2ToEncoder(width, height, targetFps)
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
@@ -619,62 +622,77 @@ class StreamService : LifecycleService() {
     }
 
     private fun startEncoderOutputReader() {
-        if (encoder == null) return
-        encoderOutputThread = Thread {
-            try {
-                val codec = encoder ?: return@Thread
-                val info = BufferInfo()
-                while (running && codec != null) {
-                    // short timeout so we drain quickly and avoid encoder internal backlog
-                    val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
-                    if (outIndex >= 0) {
-                        val outBuf = codec.getOutputBuffer(outIndex)
-                        val outBytes = ByteArray(info.size)
-                        outBuf?.get(outBytes)
-                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                            avcConfig = outBytes
-                            Log.i(TAG, "Saved AVC config size=${outBytes.size}")
-                        } else {
-                            if (!frameQueue.offer(outBytes)) {
-                                // queue is full: drop the oldest frame to keep latest
-                                frameQueue.poll()
+        synchronized(encoderOutputLock) {
+            if (encoder == null) return
+            // avoid starting multiple concurrent reader threads
+            val existing = encoderOutputThread
+            if (existing != null && existing.isAlive) return
+
+            encoderOutputThread = Thread {
+                encoderOutputRunning = true
+                try {
+                    val codec = encoder ?: return@Thread
+                    val info = BufferInfo()
+                    while (running && codec != null && encoderOutputRunning) {
+                        // short timeout so we drain quickly and avoid encoder internal backlog
+                        val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
+                        if (outIndex >= 0) {
+                            val outBuf = codec.getOutputBuffer(outIndex)
+                            val outBytes = ByteArray(info.size)
+                            outBuf?.get(outBytes)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                avcConfig = outBytes
+                                Log.i(TAG, "Saved AVC config size=${outBytes.size}")
+                            } else {
                                 if (!frameQueue.offer(outBytes)) {
-                                    // if still failing, count drops for diagnostics
-                                    encoderDroppedFrames++
-                                    if (encoderDroppedFrames % 50 == 0) {
-                                        Log.w(TAG, "Encoder dropping frames; dropped total=$encoderDroppedFrames")
+                                    // queue is full: drop the oldest frame to keep latest
+                                    frameQueue.poll()
+                                    if (!frameQueue.offer(outBytes)) {
+                                        // if still failing, count drops for diagnostics
+                                        encoderDroppedFrames++
+                                        if (encoderDroppedFrames % 50 == 0) {
+                                            Log.w(TAG, "Encoder dropping frames; dropped total=$encoderDroppedFrames")
+                                        }
                                     }
                                 }
                             }
+                            try { codec.releaseOutputBuffer(outIndex, false) } catch (e: Exception) { Log.w(TAG, "releaseOutputBuffer failed", e) }
+                        } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            // no output currently
+                            continue
+                        } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            try {
+                                val outFmt = codec.outputFormat
+                                Log.i(TAG, "Encoder output format changed: $outFmt")
+                            } catch (e: Exception) {
+                                Log.i(TAG, "Encoder output format changed")
+                            }
+                        } else {
+                            // unexpected
                         }
-                        codec.releaseOutputBuffer(outIndex, false)
-                    } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        // no output currently
-                        continue
-                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        try {
-                            val outFmt = codec.outputFormat
-                            Log.i(TAG, "Encoder output format changed: $outFmt")
-                        } catch (e: Exception) {
-                            Log.i(TAG, "Encoder output format changed")
-                        }
-                    } else {
-                        // unexpected
                     }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Encoder output reader error", t)
+                } finally {
+                    encoderOutputRunning = false
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "Encoder output reader error", t)
+                Log.i(TAG, "Encoder output reader exiting")
             }
-            Log.i(TAG, "Encoder output reader exiting")
+            encoderOutputThread?.start()
         }
-        encoderOutputThread?.start()
     }
 
     private fun stopEncoderOutputReader() {
-        try {
-            encoderOutputThread?.interrupt()
-        } catch (_: Exception) {}
-        encoderOutputThread = null
+        synchronized(encoderOutputLock) {
+            try {
+                encoderOutputRunning = false
+                encoderOutputThread?.interrupt()
+                try {
+                    encoderOutputThread?.join(500)
+                } catch (_: Exception) {}
+            } catch (_: Exception) {}
+            encoderOutputThread = null
+        }
     }
 
     private fun handleImageProxy(image: ImageProxy) {
@@ -894,25 +912,19 @@ class StreamService : LifecycleService() {
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // pick size that best matches requested aspect; fall back to nearest area
-                    val targetAspect = reqWidth.toDouble() / reqHeight
-                    val targetArea = reqWidth.toLong() * reqHeight.toLong()
+                    // find exact match or choose closest by area
                     var chosen = sizes[0]
-                    var bestAspectDiff = kotlin.math.abs(chosen.width.toDouble() / chosen.height - targetAspect)
-                    var bestAreaDiff = kotlin.math.abs(chosen.width.toLong() * chosen.height.toLong() - targetArea)
+                    var bestDiff = Math.abs(chosen.width * chosen.height - reqWidth * reqHeight)
                     for (s in sizes) {
                         if (s.width == reqWidth && s.height == reqHeight) {
                             chosen = s
-                            bestAspectDiff = 0.0
-                            bestAreaDiff = 0
+                            bestDiff = 0
                             break
                         }
-                        val aspectDiff = kotlin.math.abs(s.width.toDouble() / s.height - targetAspect)
-                        val areaDiff = kotlin.math.abs(s.width.toLong() * s.height.toLong() - targetArea)
-                        if (aspectDiff < bestAspectDiff - 1e-3 || (kotlin.math.abs(aspectDiff - bestAspectDiff) < 1e-3 && areaDiff < bestAreaDiff)) {
+                        val diff = Math.abs(s.width * s.height - reqWidth * reqHeight)
+                        if (diff < bestDiff) {
+                            bestDiff = diff
                             chosen = s
-                            bestAspectDiff = aspectDiff
-                            bestAreaDiff = areaDiff
                         }
                     }
                     chosenWidth = chosen.width
