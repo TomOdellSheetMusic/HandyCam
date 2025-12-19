@@ -58,20 +58,6 @@ class KtorHttpsServerService : LifecycleService() {
     private var isRunning = false
     private lateinit var settingsManager: SettingsManager
     
-    @Serializable
-    data class ServerStatus(
-        val status: String,
-        val streaming: Boolean,
-        val port: Int,
-        val uptime: Long
-    )
-    
-    @Serializable
-    data class ServerInfo(
-        val name: String,
-        val version: String,
-        val protocol: String
-    )
     
     private var startTime: Long = 0
 
@@ -157,7 +143,7 @@ class KtorHttpsServerService : LifecycleService() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                startTime = System.currentTimeMillis()
+                // startTime = System.currentTimeMillis()
                 
                 // Generate a self-signed certificate for local HTTPS
                 // This is a "snakeoil" certificate for local use only
@@ -292,19 +278,20 @@ class KtorHttpsServerService : LifecycleService() {
             
             // Add custom routes here as needed
             get("/api/camera/status") {
-                call.respond(mapOf(
-                    "streaming" to (settingsManager.isStreaming.value ?: false),
-                    "port" to (settingsManager.port.value ?: 4747),
-                    "camera" to (settingsManager.camera.value ?: "back"),
-                    "width" to (settingsManager.width.value ?: 1080),
-                    "height" to (settingsManager.height.value ?: 1920),
-                    "fps" to (settingsManager.fps.value ?: 30),
-                    "jpegQuality" to (settingsManager.jpegQuality.value ?: 85),
-                    "useAvc" to (settingsManager.useAvc.value ?: false),
-                    "torchEnabled" to (settingsManager.torchEnabled.value ?: false),
-                    "autoFocus" to (settingsManager.autoFocus.value ?: true),
-                    "exposure" to (settingsManager.exposure.value ?: 0)
-                ))
+                val status = CameraStatus(
+                    streaming = (settingsManager.isStreaming.value ?: false),
+                    port = (settingsManager.port.value ?: 4747),
+                    camera = (settingsManager.camera.value ?: "back"),
+                    width = (settingsManager.width.value ?: 1920),
+                    height = (settingsManager.height.value ?: 1080),
+                    fps = (settingsManager.fps.value ?: 30),
+                    jpegQuality = (settingsManager.jpegQuality.value ?: 85),
+                    useAvc = (settingsManager.useAvc.value ?: false),
+                    torchEnabled = (settingsManager.torchEnabled.value ?: false),
+                    autoFocus = (settingsManager.autoFocus.value ?: true),
+                    exposure = (settingsManager.exposure.value ?: 0)
+                )
+                call.respond(status)
             }
             
             post("/api/camera/start") {

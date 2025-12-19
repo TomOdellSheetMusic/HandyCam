@@ -271,7 +271,7 @@
 
                 const statusEl = document.getElementById('status');
                 if (data.streaming === true) {
-                    statusEl.textContent = '🟢 Camera is Streaming on port ' + data.port + ' for ' + data.uptime/1000 + ' seconds';
+                    statusEl.textContent = '🟢 Camera is Streaming on port ' + data.port;
                     statusEl.className = 'status active';
                 } else {
                     statusEl.textContent = '🔴 Camera is Stopped';
@@ -281,7 +281,7 @@
                 showMessage('Failed to check status: ' + e.message, false);
             }
         }
-        /*async function checkCameraSettings() {
+        async function checkCameraSettings() {
             try {
                 const response = await fetch('/api/camera/status');
                 if (!response.ok) {
@@ -325,7 +325,7 @@
                 console.error('Failed to check camera settings:', e);
                 showMessage('Failed to load camera settings', false);
             }
-        }*/
+        }
 
         function updateToggleButtons() {
             const torchBtn = document.getElementById('torchBtn');
