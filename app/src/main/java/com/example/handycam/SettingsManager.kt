@@ -62,6 +62,14 @@ class SettingsManager private constructor(context: Context) {
     // Exposure settings
     private val _exposure = MutableLiveData<Int>(0)
     val exposure: LiveData<Int> get() = _exposure
+    
+    // Manual focus (0-100)
+    private val _focus = MutableLiveData<Int>(0)
+    val focus: LiveData<Int> get() = _focus
+    
+    // Auto exposure toggle
+    private val _autoExposure = MutableLiveData<Boolean>(true)
+    val autoExposure: LiveData<Boolean> get() = _autoExposure
 
     // Update methods
     fun setStreaming(value: Boolean) {
@@ -110,5 +118,14 @@ class SettingsManager private constructor(context: Context) {
 
     fun setExposure(value: Int) {
         if (Looper.myLooper() == Looper.getMainLooper()) _exposure.value = value else _exposure.postValue(value)
+    }
+
+    fun setFocus(value: Int) {
+        val v = value.coerceIn(0, 100)
+        if (Looper.myLooper() == Looper.getMainLooper()) _focus.value = v else _focus.postValue(v)
+    }
+
+    fun setAutoExposure(value: Boolean) {
+        if (Looper.myLooper() == Looper.getMainLooper()) _autoExposure.value = value else _autoExposure.postValue(value)
     }
 }

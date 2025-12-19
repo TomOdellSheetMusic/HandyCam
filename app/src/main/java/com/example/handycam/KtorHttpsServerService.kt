@@ -486,6 +486,17 @@ class KtorHttpsServerService : LifecycleService() {
                 }
             }
 
+            post("/api/settings/focus") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val focus = params["focus"] ?: 0
+                    settingsManager.setFocus(focus)
+                    call.respond(ApiResponse(true, "Focus updated to $focus"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid focus value: ${e.message}"))
+                }
+            }
+
             post("/api/settings/port") {
                 try {
                     val params = call.receive<Map<String, Int>>()

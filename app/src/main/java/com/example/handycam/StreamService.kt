@@ -100,6 +100,21 @@ class StreamService : LifecycleService() {
         super.onCreate()
         createNotificationChannel()
         settingsManager = SettingsManager.getInstance(this)
+        // Observe relevant settings to apply runtime changes
+        try {
+            settingsManager.torchEnabled.observe(this) { enabled ->
+                try { applyTorch(enabled) } catch (e: Exception) { Log.e(TAG, "applyTorch observer error", e) }
+            }
+            settingsManager.exposure.observe(this) { v ->
+                try { applyExposure(v) } catch (e: Exception) { Log.e(TAG, "applyExposure observer error", e) }
+            }
+            settingsManager.focus.observe(this) { v ->
+                try { applyFocus(v) } catch (e: Exception) { Log.e(TAG, "applyFocus observer error", e) }
+            }
+            settingsManager.autoFocus.observe(this) { af ->
+                try { applyAutoFocus(af) } catch (e: Exception) { Log.e(TAG, "applyAutoFocus observer error", e) }
+            }
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -242,6 +257,136 @@ class StreamService : LifecycleService() {
             putExtra("isStreaming", isStreaming)
         }
         sendBroadcast(intent)
+    }
+
+    // Apply torch state to camera (CameraX or Camera2)
+    private fun applyTorch(enabled: Boolean) {
+        try {
+            if (!useAvc) {
+                SharedSurfaceProvider.cameraControl?.enableTorch(enabled)
+                Log.i(TAG, "Applied torch via CameraControl: $enabled")
+            } else {
+                // For Camera2 path, update repeating request to set FLASH_MODE
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                        if (enabled) {
+                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH) } catch (_: Exception) {}
+                        } else {
+                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF) } catch (_: Exception) {}
+                        }
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied torch via Camera2: $enabled")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply torch on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyTorch error", e)
+        }
+    }
+
+    // Apply exposure compensation
+    private fun applyExposure(value: Int) {
+        try {
+            if (!useAvc) {
+                val cc = SharedSurfaceProvider.cameraControl
+                val info = SharedSurfaceProvider.cameraInfo
+                try {
+                    // clamp to camera's exposure range if available
+                    val range = info?.exposureState?.exposureCompensationRange
+                    val v = if (range != null) value.coerceIn(range.lower, range.upper) else value
+                    cc?.setExposureCompensationIndex(v)
+                    Log.i(TAG, "Applied exposure via CameraControl: $v")
+                } catch (e: Exception) {
+                    Log.w(TAG, "CameraControl exposure apply failed", e)
+                }
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                        try { builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, value) } catch (_: Exception) {}
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied exposure via Camera2: $value")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply exposure on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyExposure error", e)
+        }
+    }
+
+    // Apply manual focus (best-effort: Camera2 LENS_FOCUS_DISTANCE)
+    private fun applyFocus(value: Int) {
+        try {
+            if (!useAvc) {
+                // Manual focus not directly supported in CameraX generic API; no-op
+                Log.i(TAG, "Manual focus requested ($value) but CameraX manual focus not supported; ignoring")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        // Map 0..100 slider to a focus distance value (inverse meters). 0 -> infinity (0.0f), 100 -> 1.0f
+                        val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
+                        try { builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
+                        try { builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd) } catch (_: Exception) {}
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply focus on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyFocus error", e)
+        }
+    }
+
+    private fun applyAutoFocus(enabled: Boolean) {
+        try {
+            if (!useAvc) {
+                // CameraX: toggling AF mode programmatically requires a PreviewView to build a MeteringPoint.
+                // We'll no-op here and rely on Camera2 path for manual AF control.
+                Log.i(TAG, "AutoFocus change requested for CameraX: $enabled (no-op)")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        if (enabled) builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) else builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply AF mode on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyAutoFocus error", e)
+        }
     }
 
     private fun createNotificationChannel() {

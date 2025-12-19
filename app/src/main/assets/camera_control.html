@@ -245,6 +245,13 @@
         </div>
 
         <div class="control-group">
+            <div class="control-label">
+                <span>Manual Focus: <span id="focusValue">0</span></span>
+            </div>
+            <input type="range" id="focusSlider" min="0" max="100" value="0" onchange="setFocus(this.value)">
+        </div>
+
+        <div class="control-group">
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">💡 Torch: OFF</button>
             <button class="toggle-btn" id="autoFocusBtn" onclick="toggleAutoFocus()">🎯 Auto Focus: ON</button>
         </div>
@@ -426,6 +433,21 @@
                 if (!data.success) showMessage(data.message, false);
             } catch (e) {
                 showMessage('Failed to set exposure: ' + e.message, false);
+            }
+        }
+
+        async function setFocus(focus) {
+            document.getElementById('focusValue').textContent = focus;
+            try {
+                const response = await fetch('/api/settings/focus', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ focus: parseInt(focus) })
+                });
+                const data = await response.json();
+                if (!data.success) showMessage(data.message, false);
+            } catch (e) {
+                showMessage('Failed to set focus: ' + e.message, false);
             }
         }
 
