@@ -421,7 +421,7 @@ class StreamService : LifecycleService() {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
             // camera output size and call setupEncoder(...) with a compatible size.
             try {
-                startCamera2ToEncoder(width, height, targetFps)
+                startCamera2ToEncoder(height, width, targetFps)
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
@@ -447,7 +447,7 @@ class StreamService : LifecycleService() {
                 this@StreamService.cameraProvider = cameraProvider
 
                 val analysisUseCase = ImageAnalysis.Builder()
-                    .setTargetResolution(android.util.Size(height, width))
+                    .setTargetResolution(android.util.Size(width, height))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
@@ -586,7 +586,7 @@ class StreamService : LifecycleService() {
         } catch (_: Exception) {}
     }
 
-    private fun setupEncoder(width: Int, height: Int, fps: Int) {
+      private fun setupEncoder(width: Int, height: Int, fps: Int) {
         val mime = "video/avc"
         // choose a higher-quality bitrate: allow a user-specified bitrate override,
         // otherwise derive a reasonable default (pixels * fps / 10)
