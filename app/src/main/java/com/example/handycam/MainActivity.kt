@@ -18,6 +18,8 @@ import androidx.core.content.ContextCompat
 import android.content.Context
 import android.view.View
 import android.util.Size
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import androidx.camera.core.CameraControl
 
 private const val DEFAULT_PORT = 4747
@@ -190,7 +192,10 @@ class MainActivity : AppCompatActivity() {
 
         // load saved settings
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        hostEdit.setText(prefs.getString("host", "0.0.0.0"))
+        // Auto-fill host: prefer saved non-empty host, otherwise detect local IPv4
+        val savedHost = prefs.getString("host", null)
+        val autoHost = if (!savedHost.isNullOrBlank() && savedHost != "0.0.0.0") savedHost else (getLocalIpAddress() ?: "0.0.0.0")
+        hostEdit.setText(autoHost)
         portEdit.setText(prefs.getInt("port", DEFAULT_PORT).toString())
         widthEdit.setText(prefs.getInt("width", 1080).toString())
         heightEdit.setText(prefs.getInt("height", 1920).toString())
@@ -472,6 +477,30 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         try { streamStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
         try { httpsServerStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+    }
+
+    // Try to find a reasonable local IPv4 address (prefer private ranges)
+    private fun getLocalIpAddress(): String? {
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces()
+            val candidates = mutableListOf<String>()
+            for (iface in ifaces) {
+                try {
+                    if (!iface.isUp || iface.isLoopback) continue
+                    val addrs = iface.inetAddresses
+                    for (addr in addrs) {
+                        if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                            val host = addr.hostAddress
+                            // prefer typical private ranges first
+                            if (host.startsWith("192.") || host.startsWith("10.") || host.startsWith("172.")) return host
+                            candidates.add(host)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            if (candidates.isNotEmpty()) return candidates.first()
+        } catch (_: Exception) {}
+        return null
     }
 
     // preview binding moved to PreviewActivity
