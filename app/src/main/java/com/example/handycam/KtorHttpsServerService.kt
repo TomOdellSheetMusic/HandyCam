@@ -87,6 +87,7 @@ class KtorHttpsServerService : LifecycleService() {
         val torchEnabled: Boolean,
         val autoFocus: Boolean,
         val exposure: Int
+        , val avcBitrate: Int
     )
 
     @Serializable
@@ -333,7 +334,8 @@ class KtorHttpsServerService : LifecycleService() {
                     useAvc = (settingsManager.useAvc.value ?: false),
                     torchEnabled = (settingsManager.torchEnabled.value ?: false),
                     autoFocus = (settingsManager.autoFocus.value ?: true),
-                    exposure = (settingsManager.exposure.value ?: 0)
+                    exposure = (settingsManager.exposure.value ?: 0),
+                    avcBitrate = (settingsManager.avcBitrate.value ?: -1)
                 )
                 call.respond(status)
             }
@@ -378,6 +380,7 @@ class KtorHttpsServerService : LifecycleService() {
                         putExtra("camera", settingsManager.camera.value ?: "back")
                         putExtra("jpegQuality", settingsManager.jpegQuality.value ?: 85)
                         putExtra("targetFps", settingsManager.fps.value ?: 30)
+                        putExtra("avcBitrate", settingsManager.avcBitrate.value ?: -1)
                         putExtra("useAvc", settingsManager.useAvc.value ?: false)
                     }
                     startService(intent)
@@ -450,6 +453,28 @@ class KtorHttpsServerService : LifecycleService() {
                     call.respond(ApiResponse(true, "JPEG quality updated to $quality"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid JPEG quality: ${e.message}"))
+                }
+            }
+
+            post("/api/settings/use-avc") {
+                try {
+                    val params = call.receive<Map<String, Boolean>>()
+                    val enabled = params["enabled"] ?: false
+                    settingsManager.setUseAvc(enabled)
+                    call.respond(ApiResponse(true, "useAvc set to $enabled"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid use-avc value: ${e.message}"))
+                }
+            }
+
+            post("/api/settings/avc-bitrate") {
+                try {
+                    val params = call.receive<Map<String, Int>>()
+                    val bitrate = params["bitrate"] ?: -1
+                    settingsManager.setAvcBitrate(bitrate)
+                    call.respond(ApiResponse(true, "AVC bitrate set to $bitrate"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid avc bitrate: ${e.message}"))
                 }
             }
 

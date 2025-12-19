@@ -228,6 +228,7 @@
                 <span>FPS: <span id="fpsValue">30</span></span>
             </div>
             <input type="range" id="fpsSlider" min="15" max="60" value="30" onchange="setFps(this.value)">
+            <button class="btn-refresh" id="applyFpsBtn" onclick="applyFps()">Apply FPS (restart)</button>
         </div>
 
         <div class="control-group">
@@ -235,6 +236,15 @@
                 <span>JPEG Quality: <span id="jpegValue">85</span>%</span>
             </div>
             <input type="range" id="jpegSlider" min="50" max="100" value="85" onchange="setJpegQuality(this.value)">
+            <button class="btn-refresh" id="applyJpegBtn" onclick="applyJpeg()">Apply JPEG (restart)</button>
+        </div>
+
+        <div class="control-group" id="avcGroup" style="display:none;">
+            <div class="control-label">
+                <span>AVC Bitrate (kbps): <span id="avcValue">2000</span></span>
+            </div>
+            <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" onchange="setAvcBitrate(this.value)">
+            <button class="btn-refresh" id="applyAvcBtn" onclick="applyAvc()">Apply AVC (restart)</button>
         </div>
 
         <div class="control-group">
@@ -243,17 +253,11 @@
             </div>
             <input type="range" id="exposureSlider" min="-50" max="50" value="0" onchange="setExposure(this.value)">
         </div>
-
-        <div class="control-group">
-            <div class="control-label">
-                <span>Manual Focus: <span id="focusValue">0</span></span>
-            </div>
-            <input type="range" id="focusSlider" min="0" max="100" value="0" onchange="setFocus(this.value)">
-        </div>
-
         <div class="control-group">
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">💡 Torch: OFF</button>
-            <button class="toggle-btn" id="autoFocusBtn" onclick="toggleAutoFocus()">🎯 Auto Focus: ON</button>
+            <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">🎞️ Use AVC: OFF</button>
+            <div id="torchNote" style="font-size:12px;color:#666;margin-top:6px;display:none;color:darkred">Torch only works while stream is started</div>
+            <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">☀️ Auto Exposure: ON</button>
         </div>
 
         <button class="btn-refresh" onclick="checkStatus()">🔄 Refresh Status</button>
@@ -261,7 +265,8 @@
 
     <script>
         let torchEnabled = false;
-        let autoFocusEnabled = true;
+        let avcEnabled = false;
+        let avcBitrate = 2000;
 
         function showMessage(text, isSuccess) {
             const msg = document.getElementById('message');
@@ -279,9 +284,15 @@
                 if (data.streaming === true) {
                     statusEl.textContent = '🟢 Camera is Streaming on port ' + data.port;
                     statusEl.className = 'status active';
+                    // enable torch control while streaming
+                    try { document.getElementById('torchBtn').disabled = false; } catch (_) {}
+                    try { document.getElementById('torchNote').style.display = 'none'; } catch (_) {}
                 } else {
                     statusEl.textContent = '🔴 Camera is Stopped';
                     statusEl.className = 'status inactive';
+                    // disable torch control when not streaming
+                    try { document.getElementById('torchBtn').disabled = true; } catch (_) {}
+                    try { document.getElementById('torchNote').style.display = 'block'; } catch (_) {}
                 }
             } catch (e) {
                 showMessage('Failed to check status: ' + e.message, false);
@@ -319,13 +330,41 @@
                 document.getElementById('jpegSlider').value = data.jpegQuality;
                 document.getElementById('jpegValue').textContent = data.jpegQuality;
 
+                // AVC support: show/hide JPEG vs AVC controls
+                avcEnabled = data.useAvc === true;
+                avcBitrate = data.avcBitrate || 2000;
+                const jpegGroup = document.getElementById('jpegSlider').parentElement;
+                const avcGroup = document.getElementById('avcGroup');
+                if (avcEnabled) {
+                    jpegGroup.style.display = 'none';
+                    avcGroup.style.display = '';
+                    document.getElementById('avcSlider').value = avcBitrate;
+                    document.getElementById('avcValue').textContent = avcBitrate;
+                } else {
+                    jpegGroup.style.display = '';
+                    avcGroup.style.display = 'none';
+                }
+
                 document.getElementById('exposureSlider').value = data.exposure;
                 document.getElementById('exposureValue').textContent = data.exposure;
 
+                // auto exposure visibility
+                const exposureGroup = document.getElementById('exposureSlider').parentElement;
+                const autoExposureEnabledLocal = data.autoExposure === true;
+                // When auto-exposure is enabled, hide manual exposure slider
+                if (autoExposureEnabledLocal) {
+                    exposureGroup.style.display = 'none';
+                } else {
+                    exposureGroup.style.display = '';
+                }
+
+                // remember auto flags for UI
+                window.autoExposureEnabled = autoExposureEnabledLocal;
+
                 // Toggles
                 torchEnabled = data.torchEnabled === true;
-                autoFocusEnabled = data.autoFocus !== false;
                 updateToggleButtons();
+                updateAvcButton();
 
             } catch (e) {
                 console.error('Failed to check camera settings:', e);
@@ -335,7 +374,8 @@
 
         function updateToggleButtons() {
             const torchBtn = document.getElementById('torchBtn');
-            const autoFocusBtn = document.getElementById('autoFocusBtn');
+            const autoExposureBtn = document.getElementById('autoExposureBtn');
+            const useAvcBtn = document.getElementById('useAvcBtn');
 
             if (torchEnabled) {
                 torchBtn.textContent = '💡 Torch: ON';
@@ -344,13 +384,26 @@
                 torchBtn.textContent = '💡 Torch: OFF';
                 torchBtn.classList.remove('active');
             }
+            if (useAvcBtn) {
+                if (avcEnabled) {
+                    useAvcBtn.textContent = '🎞️ Use AVC: ON';
+                    useAvcBtn.classList.add('active');
+                } else {
+                    useAvcBtn.textContent = '🎞️ Use AVC: OFF';
+                    useAvcBtn.classList.remove('active');
+                }
+            }
+        }
 
-            if (autoFocusEnabled) {
-                autoFocusBtn.textContent = '🎯 Auto Focus: ON';
-                autoFocusBtn.classList.add('active');
+        function updateAvcButton() {
+            const useAvcBtn = document.getElementById('useAvcBtn');
+            if (!useAvcBtn) return;
+            if (avcEnabled) {
+                useAvcBtn.textContent = '🎞️ Use AVC: ON';
+                useAvcBtn.classList.add('active');
             } else {
-                autoFocusBtn.textContent = '🎯 Auto Focus: OFF';
-                autoFocusBtn.classList.remove('active');
+                useAvcBtn.textContent = '🎞️ Use AVC: OFF';
+                useAvcBtn.classList.remove('active');
             }
         }
 
@@ -421,6 +474,75 @@
             }
         }
 
+        async function applyFps() {
+            const btn = document.getElementById('applyFpsBtn');
+            btn.disabled = true;
+            const fps = parseInt(document.getElementById('fpsSlider').value);
+            try {
+                // ensure setting saved
+                await fetch('/api/settings/fps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fps })
+                });
+            } catch (e) {
+                showMessage('Failed to save FPS: ' + e.message, false);
+                btn.disabled = false; return;
+            }
+
+            try {
+                let resp = await fetch('/api/camera/stop', { method: 'POST' });
+                let data = await resp.json();
+                if (!data.success) {
+                    showMessage('Failed to stop stream: ' + data.message, false);
+                    btn.disabled = false; return;
+                }
+
+                resp = await fetch('/api/camera/start', { method: 'POST' });
+                data = await resp.json();
+                showMessage(data.message, data.success);
+                if (data.success) setTimeout(checkStatus, 1000);
+            } catch (e) {
+                showMessage('Failed to restart stream: ' + e.message, false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function applyJpeg() {
+            const btn = document.getElementById('applyJpegBtn');
+            btn.disabled = true;
+            const quality = parseInt(document.getElementById('jpegSlider').value);
+            try {
+                await fetch('/api/settings/jpeg-quality', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ quality })
+                });
+            } catch (e) {
+                showMessage('Failed to save JPEG quality: ' + e.message, false);
+                btn.disabled = false; return;
+            }
+
+            try {
+                let resp = await fetch('/api/camera/stop', { method: 'POST' });
+                let data = await resp.json();
+                if (!data.success) {
+                    showMessage('Failed to stop stream: ' + data.message, false);
+                    btn.disabled = false; return;
+                }
+
+                resp = await fetch('/api/camera/start', { method: 'POST' });
+                data = await resp.json();
+                showMessage(data.message, data.success);
+                if (data.success) setTimeout(checkStatus, 1000);
+            } catch (e) {
+                showMessage('Failed to restart stream: ' + e.message, false);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         async function setExposure(exposure) {
             document.getElementById('exposureValue').textContent = exposure;
             try {
@@ -433,21 +555,6 @@
                 if (!data.success) showMessage(data.message, false);
             } catch (e) {
                 showMessage('Failed to set exposure: ' + e.message, false);
-            }
-        }
-
-        async function setFocus(focus) {
-            document.getElementById('focusValue').textContent = focus;
-            try {
-                const response = await fetch('/api/settings/focus', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ focus: parseInt(focus) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set focus: ' + e.message, false);
             }
         }
 
@@ -474,28 +581,57 @@
             }
         }
 
-        async function toggleAutoFocus() {
-            autoFocusEnabled = !autoFocusEnabled;
+        async function toggleUseAvc() {
+            avcEnabled = !avcEnabled;
             try {
-                const response = await fetch('/api/settings/auto-focus', {
+                const response = await fetch('/api/settings/use-avc', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled: autoFocusEnabled })
+                    body: JSON.stringify({ enabled: avcEnabled })
                 });
                 const data = await response.json();
-                if (data.success) {
-                    updateToggleButtons();
-                } else {
-                    autoFocusEnabled = !autoFocusEnabled;
-                    updateToggleButtons();
-                    showMessage(data.message, false);
+                if (!data.success) {
+                    avcEnabled = !avcEnabled; updateAvcButton(); showMessage(data.message, false); return;
                 }
+                updateAvcButton();
             } catch (e) {
-                autoFocusEnabled = !autoFocusEnabled;
-                updateToggleButtons();
-                showMessage('Failed to toggle auto focus: ' + e.message, false);
+                avcEnabled = !avcEnabled; updateAvcButton(); showMessage('Failed to set AVC mode: ' + e.message, false);
             }
         }
+
+        function setAvcBitrate(b) {
+            avcBitrate = parseInt(b);
+            document.getElementById('avcValue').textContent = avcBitrate;
+        }
+
+        async function applyAvc() {
+            const btn = document.getElementById('applyAvcBtn');
+            btn.disabled = true;
+            try {
+                await fetch('/api/settings/avc-bitrate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bitrate: avcBitrate })
+                });
+            } catch (e) {
+                showMessage('Failed to save AVC bitrate: ' + e.message, false);
+                btn.disabled = false; return;
+            }
+
+            try {
+                let resp = await fetch('/api/camera/stop', { method: 'POST' });
+                let data = await resp.json();
+                if (!data.success) { showMessage('Failed to stop stream: ' + data.message, false); btn.disabled = false; return; }
+                resp = await fetch('/api/camera/start', { method: 'POST' });
+                data = await resp.json();
+                showMessage(data.message, data.success);
+                if (data.success) setTimeout(checkStatus, 1000);
+            } catch (e) {
+                showMessage('Failed to restart stream: ' + e.message, false);
+            } finally { btn.disabled = false; }
+        }
+
+    
 
         async function loadCameraList() {
             try {

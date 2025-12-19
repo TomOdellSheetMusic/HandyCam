@@ -447,7 +447,7 @@ class StreamService : LifecycleService() {
                 this@StreamService.cameraProvider = cameraProvider
 
                 val analysisUseCase = ImageAnalysis.Builder()
-                    .setTargetResolution(android.util.Size(width, height))
+                    .setTargetResolution(android.util.Size(height, width))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 

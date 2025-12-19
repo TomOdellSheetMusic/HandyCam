@@ -47,6 +47,10 @@ class SettingsManager private constructor(context: Context) {
     private val _useAvc = MutableLiveData<Boolean>(false)
     val useAvc: LiveData<Boolean> get() = _useAvc
 
+    // AVC bitrate (kbps) for encoder when using AVC path
+    private val _avcBitrate = MutableLiveData<Int>(-1)
+    val avcBitrate: LiveData<Int> get() = _avcBitrate
+
     // Host/IP settings
     private val _host = MutableLiveData<String>("0.0.0.0")
     val host: LiveData<String> get() = _host
@@ -102,6 +106,10 @@ class SettingsManager private constructor(context: Context) {
 
     fun setUseAvc(value: Boolean) {
         if (Looper.myLooper() == Looper.getMainLooper()) _useAvc.value = value else _useAvc.postValue(value)
+    }
+
+    fun setAvcBitrate(value: Int) {
+        if (Looper.myLooper() == Looper.getMainLooper()) _avcBitrate.value = value else _avcBitrate.postValue(value)
     }
 
     fun setHost(value: String) {
