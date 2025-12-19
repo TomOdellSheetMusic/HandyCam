@@ -23,3 +23,4 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Stream Audio
 - Remote Control Camera Settings
 - Squash Bugs
+- Auto-Disover Phone Camera Capabilites
