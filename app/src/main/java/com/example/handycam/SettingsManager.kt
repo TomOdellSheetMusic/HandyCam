@@ -1,6 +1,7 @@
 package com.example.handycam
 
 import android.content.Context
+import android.os.Looper
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 
@@ -62,50 +63,50 @@ class SettingsManager private constructor(context: Context) {
 
     // Update methods
     fun setStreaming(value: Boolean) {
-        _isStreaming.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _isStreaming.value = value else _isStreaming.postValue(value)
     }
 
     fun setCamera(value: String) {
-        _camera.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _camera.value = value else _camera.postValue(value)
     }
 
     fun setPort(value: Int) {
-        _port.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _port.value = value else _port.postValue(value)
     }
 
     fun setWidth(value: Int) {
-        _width.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _width.value = value else _width.postValue(value)
     }
 
     fun setHeight(value: Int) {
-        _height.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _height.value = value else _height.postValue(value)
     }
 
     fun setFps(value: Int) {
-        _fps.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _fps.value = value else _fps.postValue(value)
     }
 
     fun setJpegQuality(value: Int) {
-        _jpegQuality.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _jpegQuality.value = value else _jpegQuality.postValue(value)
     }
 
     fun setUseAvc(value: Boolean) {
-        _useAvc.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _useAvc.value = value else _useAvc.postValue(value)
     }
 
     fun setHost(value: String) {
-        _host.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _host.value = value else _host.postValue(value)
     }
 
     fun setTorchEnabled(value: Boolean) {
-        _torchEnabled.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _torchEnabled.value = value else _torchEnabled.postValue(value)
     }
 
     fun setAutoFocus(value: Boolean) {
-        _autoFocus.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _autoFocus.value = value else _autoFocus.postValue(value)
     }
 
     fun setExposure(value: Int) {
-        _exposure.value = value
+        if (Looper.myLooper() == Looper.getMainLooper()) _exposure.value = value else _exposure.postValue(value)
     }
 }

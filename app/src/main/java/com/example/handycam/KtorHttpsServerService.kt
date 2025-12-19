@@ -86,6 +86,12 @@ class KtorHttpsServerService : LifecycleService() {
         val autoFocus: Boolean,
         val exposure: Int
     )
+
+    @Serializable
+    data class ApiResponse(
+        val success: Boolean,
+        val message: String
+    )
     
     private var startTime: Long = 0
 
@@ -337,12 +343,9 @@ class KtorHttpsServerService : LifecycleService() {
                     }
                     startService(intent)
                     settingsManager.setStreaming(true)
-                    call.respond(mapOf("success" to true, "message" to "Camera streaming started"))
+                    call.respond(ApiResponse(true, "Camera streaming started"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf(
-                        "success" to false,
-                        "message" to "Failed to start camera: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to start camera: ${e.message}"))
                 }
             }
             
@@ -353,12 +356,9 @@ class KtorHttpsServerService : LifecycleService() {
                     }
                     startService(intent)
                     settingsManager.setStreaming(false)
-                    call.respond(mapOf("success" to true, "message" to "Camera streaming stopped"))
+                    call.respond(ApiResponse(true, "Camera streaming stopped"))
                 } catch (e: Exception) { 
-                    call.respond(HttpStatusCode.InternalServerError, mapOf(
-                        "success" to false,
-                        "message" to "Failed to stop camera: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to stop camera: ${e.message}"))
                 }
             }
             
@@ -372,12 +372,9 @@ class KtorHttpsServerService : LifecycleService() {
                     }
                     startService(intent)
                     settingsManager.setCamera(camera)
-                    call.respond(mapOf("success" to true, "message" to "Switched to $camera camera"))
+                    call.respond(ApiResponse(true, "Switched to $camera camera"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, mapOf(
-                        "success" to false,
-                        "message" to "Failed to switch camera: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to switch camera: ${e.message}"))
                 }
             }
 
@@ -387,12 +384,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Int>>()
                     val fps = params["fps"] ?: 30
                     settingsManager.setFps(fps)
-                    call.respond(mapOf("success" to true, "message" to "FPS updated to $fps"))
+                    call.respond(ApiResponse(true, "FPS updated to $fps"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Invalid FPS value: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid FPS value: ${e.message}"))
                 }
             }
 
@@ -403,12 +397,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val height = params["height"] ?: 1920
                     settingsManager.setWidth(width)
                     settingsManager.setHeight(height)
-                    call.respond(mapOf("success" to true, "message" to "Resolution updated to ${width}x${height}"))
+                    call.respond(ApiResponse(true, "Resolution updated to ${width}x${height}"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Invalid resolution: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid resolution: ${e.message}"))
                 }
             }
 
@@ -417,12 +408,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Int>>()
                     val quality = params["quality"] ?: 85
                     settingsManager.setJpegQuality(quality)
-                    call.respond(mapOf("success" to true, "message" to "JPEG quality updated to $quality"))
+                    call.respond(ApiResponse(true, "JPEG quality updated to $quality"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Invalid JPEG quality: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid JPEG quality: ${e.message}"))
                 }
             }
 
@@ -431,12 +419,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: false
                     settingsManager.setTorchEnabled(enabled)
-                    call.respond(mapOf("success" to true, "message" to "Torch ${if (enabled) "enabled" else "disabled"}"))
+                    call.respond(ApiResponse(true, "Torch ${if (enabled) "enabled" else "disabled"}"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Failed to set torch: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Failed to set torch: ${e.message}"))
                 }
             }
 
@@ -445,12 +430,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: true
                     settingsManager.setAutoFocus(enabled)
-                    call.respond(mapOf("success" to true, "message" to "Auto focus ${if (enabled) "enabled" else "disabled"}"))
+                    call.respond(ApiResponse(true, "Auto focus ${if (enabled) "enabled" else "disabled"}"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Failed to set auto focus: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Failed to set auto focus: ${e.message}"))
                 }
             }
 
@@ -459,12 +441,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Int>>()
                     val exposure = params["exposure"] ?: 0
                     settingsManager.setExposure(exposure)
-                    call.respond(mapOf("success" to true, "message" to "Exposure updated to $exposure"))
+                    call.respond(ApiResponse(true, "Exposure updated to $exposure"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Invalid exposure value: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid exposure value: ${e.message}"))
                 }
             }
 
@@ -473,12 +452,9 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Int>>()
                     val port = params["port"] ?: 4747
                     settingsManager.setPort(port)
-                    call.respond(mapOf("success" to true, "message" to "Port updated to $port"))
+                    call.respond(ApiResponse(true, "Port updated to $port"))
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "success" to false,
-                        "message" to "Invalid port: ${e.message}"
-                    ))
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid port: ${e.message}"))
                 }
             }
 
