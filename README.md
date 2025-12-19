@@ -5,6 +5,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 ## Features
 - Select any quality settings your camera supports
 - Stream low latency video to OBS
+- Remotely start/stop the stream and control the camera settings user a webinterface or the restAPI
 - Runs in the background with the screen off
 - Connection over Wifi or USB (USB Debugging has to be enabled on the phone)
   
@@ -23,4 +24,5 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Stream Audio
 - Remote Control Camera Zoom and Focus
 - Auto-Disover Phone Camera Capabilites
+- Document restAPI
 - Squash Bugs
