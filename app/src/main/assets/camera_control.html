@@ -218,10 +218,9 @@
         <button class="btn-start" onclick="startCamera()">▶️ Start Camera Stream</button>
         <button class="btn-stop" onclick="stopCamera()">⏹️ Stop Camera Stream</button>
 
-        <div class="control-group">
+        <div class="control-group" id="cameraList">
             <div class="control-label">Camera Selection</div>
-            <button class="toggle-btn" onclick="switchCamera('back')">🔄 Back Camera</button>
-            <button class="toggle-btn" onclick="switchCamera('front')">🔄 Front Camera</button>
+            <div id="cameraButtons">Loading cameras...</div>
         </div>
 
         <div class="control-group">
@@ -476,10 +475,38 @@
             }
         }
 
-        // Check status on load
+        async function loadCameraList() {
+            try {
+                const response = await fetch('/api/camera/list');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const list = await response.json();
+                const container = document.getElementById('cameraButtons');
+                container.innerHTML = '';
+                list.forEach(item => {
+                    const btn = document.createElement('button');
+                    btn.className = 'toggle-btn';
+                    btn.textContent = item.label || item.id;
+                    btn.onclick = () => {
+                        switchCamera(item.id);
+                    };
+                    container.appendChild(btn);
+                });
+            } catch (e) {
+                console.error('Failed to load camera list', e);
+                const container = document.getElementById('cameraButtons');
+                container.textContent = 'Failed to load cameras';
+            }
+        }
+
+        // Check status and camera settings on load
         checkStatus();
-        // Auto-refresh every 5 seconds
-        setInterval(checkStatus, 5000);
+        checkCameraSettings();
+        // Load camera list on load
+        loadCameraList();
+        // Auto-refresh: status + settings every 5 seconds
+        setInterval(() => { checkStatus(); checkCameraSettings(); }, 5000);
+        // Refresh camera list less frequently (every 15s)
+        setInterval(loadCameraList, 15000);
     </script>
 </body>
 

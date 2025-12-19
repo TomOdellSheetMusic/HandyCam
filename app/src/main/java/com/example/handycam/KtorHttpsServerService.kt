@@ -24,6 +24,8 @@ import io.ktor.server.request.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyPairGenerator
@@ -91,6 +93,14 @@ class KtorHttpsServerService : LifecycleService() {
     data class ApiResponse(
         val success: Boolean,
         val message: String
+    )
+
+    @Serializable
+    data class CameraInfo(
+        val id: String,
+        val label: String,
+        val facing: String,
+        val focalDesc: String
     )
     
     private var startTime: Long = 0
@@ -326,6 +336,35 @@ class KtorHttpsServerService : LifecycleService() {
                     exposure = (settingsManager.exposure.value ?: 0)
                 )
                 call.respond(status)
+            }
+
+            get("/api/camera/list") {
+                val list = mutableListOf<CameraInfo>()
+                // logical picks
+                list.add(CameraInfo("back", "back", "back", ""))
+                list.add(CameraInfo("front", "front", "front", ""))
+
+                try {
+                    val cm = this@KtorHttpsServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    cm.cameraIdList.forEach { id ->
+                        try {
+                            val chars = cm.getCameraCharacteristics(id)
+                            val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
+                                CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                                CameraCharacteristics.LENS_FACING_BACK -> "back"
+                                else -> "unknown"
+                            }
+                            val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                            val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) String.format("f=%.1fmm", focalArr[0]) else ""
+                            val label = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
+                            list.add(CameraInfo(id, label, facing, focalDesc))
+                        } catch (_: Exception) { }
+                    }
+                } catch (e: Exception) {
+                    // ignore camera enumeration failures
+                }
+
+                call.respond(list)
             }
             
             post("/api/camera/start") {
