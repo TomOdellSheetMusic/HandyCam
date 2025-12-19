@@ -44,8 +44,12 @@ class MainActivity : AppCompatActivity() {
 
     private var isStreaming = false
     private var streamStateReceiver: android.content.BroadcastReceiver? = null
+    private var httpsServerStateReceiver: android.content.BroadcastReceiver? = null
     private val PREFS = "handy_prefs"
     private var pendingStartBundle: android.os.Bundle? = null
+    private var isHttpsServerRunning = false
+    private var pagerAdapter: SettingsPagerAdapter? = null
+    private lateinit var settingsManager: SettingsManager
 
     private fun tryStartPendingIfPermsGranted() {
         val b = pendingStartBundle ?: return
@@ -62,13 +66,12 @@ class MainActivity : AppCompatActivity() {
         if (camGranted && fgGranted && notifGranted) {
             val host = b.getString("host") ?: "0.0.0.0"
             val port = b.getInt("port", DEFAULT_PORT)
-            val width = b.getInt("width", 1920)
-            val height = b.getInt("height", 1080)
+            val width = b.getInt("width", 1080)
+            val height = b.getInt("height", 1920)
             val camera = b.getString("camera") ?: "back"
             val jpeg = b.getInt("jpegQuality", 85)
             val fps = b.getInt("fps", 50)
             val useAvc = b.getBoolean("useAvc", false)
-
             try {
                 startStreaming(host, port, width, height, camera, jpeg, fps, useAvc)
                 isStreaming = true
@@ -84,7 +87,91 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        settingsManager = SettingsManager.getInstance(this)
+
         setContentView(R.layout.activity_main)
+
+        // Setup observers for settings manager
+        settingsManager.isStreaming.observe(this) { streaming ->
+            runOnUiThread {
+                try {
+                    val btn = findViewById<Button>(R.id.startButton)
+                    btn.text = if (streaming) "Stop Server" else "Start Server"
+                    isStreaming = streaming
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.camera.observe(this) { camera ->
+            runOnUiThread {
+                try {
+                    val cameraEdit = findViewById<EditText>(R.id.cameraEdit)
+                    cameraEdit.setText(camera)
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.port.observe(this) { port ->
+            runOnUiThread {
+                try {
+                    val portEdit = findViewById<EditText>(R.id.portEdit)
+                    if (portEdit.text.toString().toIntOrNull() != port) {
+                        portEdit.setText(port.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.width.observe(this) { width ->
+            runOnUiThread {
+                try {
+                    val widthEdit = findViewById<EditText>(R.id.widthEdit)
+                    if (widthEdit.text.toString().toIntOrNull() != width) {
+                        widthEdit.setText(width.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.height.observe(this) { height ->
+            runOnUiThread {
+                try {
+                    val heightEdit = findViewById<EditText>(R.id.heightEdit)
+                    if (heightEdit.text.toString().toIntOrNull() != height) {
+                        heightEdit.setText(height.toString())
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+
+        settingsManager.fps.observe(this) { fps ->
+            runOnUiThread {
+                try {
+                    val fpsSpinner = findViewById<android.widget.Spinner>(R.id.fpsSpinner)
+                    val fpsChoices = listOf("15", "24", "30", "50", "60")
+                    val index = fpsChoices.indexOf(fps.toString())
+                    if (index >= 0 && fpsSpinner.selectedItemPosition != index) {
+                        fpsSpinner.setSelection(index)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        settingsManager.httpsRunning.observe(this) { httpsRunning ->
+            runOnUiThread {
+                try {
+                    val httpsServerButton = findViewById<Button>(R.id.httpsServerButton)
+                    val httpsServerStatus = findViewById<TextView>(R.id.httpsServerStatus)
+                    httpsServerButton.text = if (httpsRunning) "Stop HTTPS Server" else "Start HTTPS Server"
+                    httpsServerStatus.text = if (httpsRunning) {
+                        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        val port = prefs.getInt("httpsServerPort", 8443)
+                        "Server running on port $port\nAccess at: http://"+settingsManager.host.value+":"+settingsManager.port.value
+                    } else {
+                        "Server stopped"
+                    }
+                } catch (_: Exception) {}
+            }
+        }
 
         val hostEdit = findViewById<EditText>(R.id.hostEdit)
         val portEdit = findViewById<EditText>(R.id.portEdit)
@@ -97,6 +184,9 @@ class MainActivity : AppCompatActivity() {
         val fpsSpinner = findViewById<android.widget.Spinner>(R.id.fpsSpinner)
         val startButton = findViewById<Button>(R.id.startButton)
         val previewButton = findViewById<Button>(R.id.previewButton)
+        val httpsPortEdit = findViewById<EditText>(R.id.httpsPortEdit)
+        val httpsServerButton = findViewById<Button>(R.id.httpsServerButton)
+        val httpsServerStatus = findViewById<TextView>(R.id.httpsServerStatus)
 
         // load saved settings
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -225,7 +315,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
 
         // setup tabs + pager
-        val pagerAdapter = SettingsPagerAdapter(this)
+        pagerAdapter = SettingsPagerAdapter(this)
         settingsPager.adapter = pagerAdapter
         com.google.android.material.tabs.TabLayoutMediator(settingsTabs, settingsPager) { tab, position ->
             tab.text = if (position == 0) "MJPEG" else "AVC"
@@ -249,19 +339,29 @@ class MainActivity : AppCompatActivity() {
         startButton.setOnClickListener {
             val host = hostEdit.text.toString().ifBlank { "0.0.0.0" }
             val port = portEdit.text.toString().toIntOrNull() ?: DEFAULT_PORT
-            val width = widthEdit.text.toString().toIntOrNull() ?: 1280
-            val height = heightEdit.text.toString().toIntOrNull() ?: 720
+            val width = widthEdit.text.toString().toIntOrNull() ?: 1920
+            val height = heightEdit.text.toString().toIntOrNull() ?: 1080
             val camera = (cameraEdit.tag as? String) ?: cameraEdit.text.toString().ifBlank { "back" }
-            val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 25
+            val fps = (fpsSpinner.selectedItem as? String)?.toIntOrNull() ?: 60
 
             // read codec-specific settings from fragments
-            val mjpegQuality = pagerAdapter.getMjpegFragment().getJpegQuality()
-            val avcBitrateMbps = pagerAdapter.getAvcFragment().getBitrateMbps()
+            val mjpegQuality = pagerAdapter?.getMjpegFragment()?.getJpegQuality() ?: 85
+            val avcBitrateMbps = pagerAdapter?.getAvcFragment()?.getBitrateMbps()
 
             // determine which codec tab is selected
             val useAvc = settingsTabs.selectedTabPosition == 1
 
             val jpeg = mjpegQuality
+
+            // Update settings manager
+            settingsManager.setHost(host)
+            settingsManager.setPort(port)
+            settingsManager.setWidth(width)
+            settingsManager.setHeight(height)
+            settingsManager.setCamera(camera)
+            settingsManager.setJpegQuality(jpeg)
+            settingsManager.setFps(fps)
+            settingsManager.setUseAvc(useAvc)
 
             // save current settings to prefs
             try {
@@ -295,11 +395,13 @@ class MainActivity : AppCompatActivity() {
                     // optimistic UI update; service will also broadcast state
                     isStreaming = true
                     startButton.text = "Stop Server"
+                    settingsManager.setStreaming(true)
                 }
             } else {
                 stopStreaming()
                 startButton.text = "Start Server"
                 isStreaming = false
+                settingsManager.setStreaming(false)
                 pendingStartBundle = null
             }
         }
@@ -325,11 +427,51 @@ class MainActivity : AppCompatActivity() {
         }
         // register as not exported to comply with Android 14+ receiver requirements
         registerReceiver(streamStateReceiver, android.content.IntentFilter("com.example.handycam.STREAM_STATE"), Context.RECEIVER_NOT_EXPORTED)
+        
+        // HTTPS Server controls
+        val httpsRunning = prefs.getBoolean("httpsServerRunning", false)
+        isHttpsServerRunning = httpsRunning
+        httpsServerButton.text = if (httpsRunning) "Stop HTTPS Server" else "Start HTTPS Server"
+        httpsServerStatus.text = if (httpsRunning) {
+            val port = prefs.getInt("httpsServerPort", 8443)
+            "Server running on port $port"
+        } else {
+            "Server stopped"
+        }
+        
+        httpsServerButton.setOnClickListener {
+            if (isHttpsServerRunning) {
+                stopHttpsServer()
+                // Don't update UI here - let the broadcast receiver handle it
+            } else {
+                val port = httpsPortEdit.text.toString().toIntOrNull() ?: 8443
+                startHttpsServer(port)
+                // Don't update UI here - let the broadcast receiver handle it
+            }
+        }
+        
+        httpsServerStateReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val running = intent?.getBooleanExtra("isRunning", false) ?: false
+                val port = intent?.getIntExtra("port", 8443) ?: 8443
+                runOnUiThread {
+                    isHttpsServerRunning = running
+                    httpsServerButton.text = if (running) "Stop HTTPS Server" else "Start HTTPS Server"
+                    httpsServerStatus.text = if (running) {
+                        "Server running on port $port\nAccess at: http://localhost:$port"
+                    } else {
+                        "Server stopped"
+                    }
+                }
+            }
+        }
+        registerReceiver(httpsServerStateReceiver, android.content.IntentFilter("com.example.handycam.HTTPS_SERVER_STATE"), Context.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try { streamStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
+        try { httpsServerStateReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
     }
 
     // preview binding moved to PreviewActivity
@@ -384,6 +526,21 @@ class MainActivity : AppCompatActivity() {
     private fun stopStreaming() {
         val intent = Intent(this, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_STOP"
+        }
+        startService(intent)
+    }
+    
+    private fun startHttpsServer(port: Int) {
+        val intent = Intent(this, KtorHttpsServerService::class.java).apply {
+            action = "com.example.handycam.ACTION_START_HTTPS_SERVER"
+            putExtra("port", port)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+    
+    private fun stopHttpsServer() {
+        val intent = Intent(this, KtorHttpsServerService::class.java).apply {
+            action = "com.example.handycam.ACTION_STOP_HTTPS_SERVER"
         }
         startService(intent)
     }

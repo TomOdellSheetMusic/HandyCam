@@ -82,6 +82,9 @@ class StreamService : LifecycleService() {
     private var cameraHandler: Handler? = null
     private var encoderInputSurface: Surface? = null
     private var encoderOutputThread: Thread? = null
+    private val encoderOutputLock = Object()
+    @Volatile
+    private var encoderOutputRunning = false
     private var imageReader: android.media.ImageReader? = null
     private var encoderWidth: Int = 0
     private var encoderHeight: Int = 0
@@ -94,10 +97,27 @@ class StreamService : LifecycleService() {
     @Volatile
     private var previewSurface: Surface? = null
     private var previewUseCase: androidx.camera.core.Preview? = null
+    private lateinit var settingsManager: SettingsManager
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        settingsManager = SettingsManager.getInstance(this)
+        // Observe relevant settings to apply runtime changes
+        try {
+            settingsManager.torchEnabled.observe(this) { enabled ->
+                try { applyTorch(enabled) } catch (e: Exception) { Log.e(TAG, "applyTorch observer error", e) }
+            }
+            settingsManager.exposure.observe(this) { v ->
+                try { applyExposure(v) } catch (e: Exception) { Log.e(TAG, "applyExposure observer error", e) }
+            }
+            settingsManager.focus.observe(this) { v ->
+                try { applyFocus(v) } catch (e: Exception) { Log.e(TAG, "applyFocus observer error", e) }
+            }
+            settingsManager.autoFocus.observe(this) { af ->
+                try { applyAutoFocus(af) } catch (e: Exception) { Log.e(TAG, "applyAutoFocus observer error", e) }
+            }
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -106,7 +126,7 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 1080 ) // phone is upright so width and height are swapped
+                val width = intent.getIntExtra("width", 1080)
                 val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
@@ -115,6 +135,24 @@ class StreamService : LifecycleService() {
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
 
+                // Update settings manager
+                settingsManager.setStreaming(true)
+                settingsManager.setCamera(selectedCamera)
+                settingsManager.setPort(port)
+                settingsManager.setWidth(width)
+                settingsManager.setHeight(height)
+                settingsManager.setJpegQuality(jpegQuality)
+                settingsManager.setFps(targetFps)
+                settingsManager.setUseAvc(useAvc)
+                settingsManager.setHost(host)
+
+                // Save streaming state to preferences
+                getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putInt("streamPort", port)
+                    .putString("camera", selectedCamera)
+                    .apply()
+                
                 try {
                     startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
                 } catch (se: SecurityException) {
@@ -135,6 +173,7 @@ class StreamService : LifecycleService() {
                 val newCam = intent.getStringExtra("camera") ?: ""
                 if (newCam.isNotBlank()) {
                     Log.i(TAG, "Received camera switch request -> $newCam")
+                    settingsManager.setCamera(newCam)
                     // perform camera switch while streaming
                     try {
                         handleCameraSwitchRequest(newCam)
@@ -149,6 +188,7 @@ class StreamService : LifecycleService() {
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
             ACTION_STOP -> {
+                settingsManager.setStreaming(false)
                 stopStreaming()
                 stopForeground(true)
                 stopSelf()
@@ -216,9 +256,140 @@ class StreamService : LifecycleService() {
     }
     private fun notifyStreamingState(isStreaming: Boolean) {
         val intent = Intent("com.example.handycam.STREAM_STATE").apply {
+                setPackage(packageName)
             putExtra("isStreaming", isStreaming)
         }
         sendBroadcast(intent)
+    }
+
+    // Apply torch state to camera (CameraX or Camera2)
+    private fun applyTorch(enabled: Boolean) {
+        try {
+            if (!useAvc) {
+                SharedSurfaceProvider.cameraControl?.enableTorch(enabled)
+                Log.i(TAG, "Applied torch via CameraControl: $enabled")
+            } else {
+                // For Camera2 path, update repeating request to set FLASH_MODE
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                        if (enabled) {
+                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH) } catch (_: Exception) {}
+                        } else {
+                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF) } catch (_: Exception) {}
+                        }
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied torch via Camera2: $enabled")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply torch on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyTorch error", e)
+        }
+    }
+
+    // Apply exposure compensation
+    private fun applyExposure(value: Int) {
+        try {
+            if (!useAvc) {
+                val cc = SharedSurfaceProvider.cameraControl
+                val info = SharedSurfaceProvider.cameraInfo
+                try {
+                    // clamp to camera's exposure range if available
+                    val range = info?.exposureState?.exposureCompensationRange
+                    val v = if (range != null) value.coerceIn(range.lower, range.upper) else value
+                    cc?.setExposureCompensationIndex(v)
+                    Log.i(TAG, "Applied exposure via CameraControl: $v")
+                } catch (e: Exception) {
+                    Log.w(TAG, "CameraControl exposure apply failed", e)
+                }
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                        try { builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, value) } catch (_: Exception) {}
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied exposure via Camera2: $value")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply exposure on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyExposure error", e)
+        }
+    }
+
+    // Apply manual focus (best-effort: Camera2 LENS_FOCUS_DISTANCE)
+    private fun applyFocus(value: Int) {
+        try {
+            if (!useAvc) {
+                // Manual focus not directly supported in CameraX generic API; no-op
+                Log.i(TAG, "Manual focus requested ($value) but CameraX manual focus not supported; ignoring")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        // Map 0..100 slider to a focus distance value (inverse meters). 0 -> infinity (0.0f), 100 -> 1.0f
+                        val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
+                        try { builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
+                        try { builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd) } catch (_: Exception) {}
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply focus on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyFocus error", e)
+        }
+    }
+
+    private fun applyAutoFocus(enabled: Boolean) {
+        try {
+            if (!useAvc) {
+                // CameraX: toggling AF mode programmatically requires a PreviewView to build a MeteringPoint.
+                // We'll no-op here and rely on Camera2 path for manual AF control.
+                Log.i(TAG, "AutoFocus change requested for CameraX: $enabled (no-op)")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        if (enabled) builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) else builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply AF mode on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyAutoFocus error", e)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -325,7 +496,7 @@ class StreamService : LifecycleService() {
                     Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     
                     // Notify that camera is ready
-                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
+                        sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to bind camera use cases in service", e)
                 }
@@ -418,7 +589,7 @@ class StreamService : LifecycleService() {
         } catch (_: Exception) {}
     }
 
-    private fun setupEncoder(width: Int, height: Int, fps: Int) {
+      private fun setupEncoder(width: Int, height: Int, fps: Int) {
         val mime = "video/avc"
         // choose a higher-quality bitrate: allow a user-specified bitrate override,
         // otherwise derive a reasonable default (pixels * fps / 10)
@@ -451,62 +622,77 @@ class StreamService : LifecycleService() {
     }
 
     private fun startEncoderOutputReader() {
-        if (encoder == null) return
-        encoderOutputThread = Thread {
-            try {
-                val codec = encoder ?: return@Thread
-                val info = BufferInfo()
-                while (running && codec != null) {
-                    // short timeout so we drain quickly and avoid encoder internal backlog
-                    val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
-                    if (outIndex >= 0) {
-                        val outBuf = codec.getOutputBuffer(outIndex)
-                        val outBytes = ByteArray(info.size)
-                        outBuf?.get(outBytes)
-                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                            avcConfig = outBytes
-                            Log.i(TAG, "Saved AVC config size=${outBytes.size}")
-                        } else {
-                            if (!frameQueue.offer(outBytes)) {
-                                // queue is full: drop the oldest frame to keep latest
-                                frameQueue.poll()
+        synchronized(encoderOutputLock) {
+            if (encoder == null) return
+            // avoid starting multiple concurrent reader threads
+            val existing = encoderOutputThread
+            if (existing != null && existing.isAlive) return
+
+            encoderOutputThread = Thread {
+                encoderOutputRunning = true
+                try {
+                    val codec = encoder ?: return@Thread
+                    val info = BufferInfo()
+                    while (running && codec != null && encoderOutputRunning) {
+                        // short timeout so we drain quickly and avoid encoder internal backlog
+                        val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
+                        if (outIndex >= 0) {
+                            val outBuf = codec.getOutputBuffer(outIndex)
+                            val outBytes = ByteArray(info.size)
+                            outBuf?.get(outBytes)
+                            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                avcConfig = outBytes
+                                Log.i(TAG, "Saved AVC config size=${outBytes.size}")
+                            } else {
                                 if (!frameQueue.offer(outBytes)) {
-                                    // if still failing, count drops for diagnostics
-                                    encoderDroppedFrames++
-                                    if (encoderDroppedFrames % 50 == 0) {
-                                        Log.w(TAG, "Encoder dropping frames; dropped total=$encoderDroppedFrames")
+                                    // queue is full: drop the oldest frame to keep latest
+                                    frameQueue.poll()
+                                    if (!frameQueue.offer(outBytes)) {
+                                        // if still failing, count drops for diagnostics
+                                        encoderDroppedFrames++
+                                        if (encoderDroppedFrames % 50 == 0) {
+                                            Log.w(TAG, "Encoder dropping frames; dropped total=$encoderDroppedFrames")
+                                        }
                                     }
                                 }
                             }
+                            try { codec.releaseOutputBuffer(outIndex, false) } catch (e: Exception) { Log.w(TAG, "releaseOutputBuffer failed", e) }
+                        } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                            // no output currently
+                            continue
+                        } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            try {
+                                val outFmt = codec.outputFormat
+                                Log.i(TAG, "Encoder output format changed: $outFmt")
+                            } catch (e: Exception) {
+                                Log.i(TAG, "Encoder output format changed")
+                            }
+                        } else {
+                            // unexpected
                         }
-                        codec.releaseOutputBuffer(outIndex, false)
-                    } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        // no output currently
-                        continue
-                    } else if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        try {
-                            val outFmt = codec.outputFormat
-                            Log.i(TAG, "Encoder output format changed: $outFmt")
-                        } catch (e: Exception) {
-                            Log.i(TAG, "Encoder output format changed")
-                        }
-                    } else {
-                        // unexpected
                     }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Encoder output reader error", t)
+                } finally {
+                    encoderOutputRunning = false
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "Encoder output reader error", t)
+                Log.i(TAG, "Encoder output reader exiting")
             }
-            Log.i(TAG, "Encoder output reader exiting")
+            encoderOutputThread?.start()
         }
-        encoderOutputThread?.start()
     }
 
     private fun stopEncoderOutputReader() {
-        try {
-            encoderOutputThread?.interrupt()
-        } catch (_: Exception) {}
-        encoderOutputThread = null
+        synchronized(encoderOutputLock) {
+            try {
+                encoderOutputRunning = false
+                encoderOutputThread?.interrupt()
+                try {
+                    encoderOutputThread?.join(500)
+                } catch (_: Exception) {}
+            } catch (_: Exception) {}
+            encoderOutputThread = null
+        }
     }
 
     private fun handleImageProxy(image: ImageProxy) {
@@ -824,7 +1010,7 @@ class StreamService : LifecycleService() {
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
                                     
                                     // Notify that camera is ready
-                                    sendBroadcast(Intent("com.example.handycam.CAMERA_READY"))
+                                        sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to start repeating request", e)
                                 }

@@ -52,6 +52,8 @@ class CameraControlActivity : AppCompatActivity() {
     private var cameraReadyReceiver: BroadcastReceiver? = null
     private var useCameraX = false // Track which camera system is being used
 
+    private lateinit var settingsManager: SettingsManager
+
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -64,6 +66,33 @@ class CameraControlActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera_control)
+
+        settingsManager = SettingsManager.getInstance(this)
+
+        // Setup observers for settings manager
+        settingsManager.isStreaming.observe(this) { streaming ->
+            if (!streaming) {
+                finish()
+            }
+        }
+
+        settingsManager.torchEnabled.observe(this) { torchEnabled ->
+            // Handle torch changes
+        }
+
+        settingsManager.autoFocus.observe(this) { autoFocus ->
+            // Handle auto focus changes
+        }
+
+        settingsManager.exposure.observe(this) { exposure ->
+            runOnUiThread {
+                exposureLabel.text = "Exposure: $exposure"
+            }
+        }
+
+        settingsManager.camera.observe(this) { camera ->
+            // Handle camera switching
+        }
 
         previewView = findViewById(R.id.previewView)
         flashBtn = findViewById(R.id.flashBtn)
