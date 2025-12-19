@@ -57,7 +57,35 @@ class KtorHttpsServerService : LifecycleService() {
     private var serverPort = 8443
     private var isRunning = false
     private lateinit var settingsManager: SettingsManager
+       @Serializable
+    data class ServerStatus(
+        val status: String,
+        val streaming: Boolean,
+        val port: Int,
+        val uptime: Long
+    )
     
+    @Serializable
+    data class ServerInfo(
+        val name: String,
+        val version: String,
+        val protocol: String
+    )
+
+    @Serializable
+    data class CameraStatus(
+        val streaming: Boolean,
+        val port: Int,
+        val camera: String,
+        val width: Int,
+        val height: Int,
+        val fps: Int,
+        val jpegQuality: Int,
+        val useAvc: Boolean,
+        val torchEnabled: Boolean,
+        val autoFocus: Boolean,
+        val exposure: Int
+    )
     
     private var startTime: Long = 0
 
@@ -300,8 +328,8 @@ class KtorHttpsServerService : LifecycleService() {
                         action = "com.example.handycam.ACTION_START"
                         putExtra("host", settingsManager.host.value ?: "0.0.0.0")
                         putExtra("port", settingsManager.port.value ?: 4747)
-                        putExtra("width", settingsManager.width.value ?: 1920)
-                        putExtra("height", settingsManager.height.value ?: 1080)
+                        putExtra("width", settingsManager.width.value ?: 1080)
+                        putExtra("height", settingsManager.height.value ?: 1920)
                         putExtra("camera", settingsManager.camera.value ?: "back")
                         putExtra("jpegQuality", settingsManager.jpegQuality.value ?: 85)
                         putExtra("targetFps", settingsManager.fps.value ?: 30)

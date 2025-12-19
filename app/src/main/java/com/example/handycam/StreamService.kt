@@ -108,8 +108,8 @@ class StreamService : LifecycleService() {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val port = intent.getIntExtra("port", 4747)
-                val width = intent.getIntExtra("width", 1920)
-                val height = intent.getIntExtra("height", 1080)
+                val width = intent.getIntExtra("width", 1080)
+                val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)

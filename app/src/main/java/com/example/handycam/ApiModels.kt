@@ -54,17 +54,3 @@ data class UpdateSettingsRequest(
     val port: Int? = null,
     val autoStart: Boolean? = null
 )
-    @Serializable
-    data class ServerStatus(
-        val status: String,
-        val streaming: Boolean,
-        val port: Int,
-        val uptime: Long
-    )
-    
-    @Serializable
-    data class ServerInfo(
-        val name: String,
-        val version: String,
-        val protocol: String
-    )

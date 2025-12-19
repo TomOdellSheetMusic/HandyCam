@@ -66,8 +66,8 @@ class MainActivity : AppCompatActivity() {
         if (camGranted && fgGranted && notifGranted) {
             val host = b.getString("host") ?: "0.0.0.0"
             val port = b.getInt("port", DEFAULT_PORT)
-            val width = b.getInt("width", 1920)
-            val height = b.getInt("height", 1080)
+            val width = b.getInt("width", 1080)
+            val height = b.getInt("height", 1920)
             val camera = b.getString("camera") ?: "back"
             val jpeg = b.getInt("jpegQuality", 85)
             val fps = b.getInt("fps", 50)
