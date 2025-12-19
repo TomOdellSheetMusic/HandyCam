@@ -72,7 +72,6 @@ class MainActivity : AppCompatActivity() {
             val jpeg = b.getInt("jpegQuality", 85)
             val fps = b.getInt("fps", 50)
             val useAvc = b.getBoolean("useAvc", false)
-
             try {
                 startStreaming(host, port, width, height, camera, jpeg, fps, useAvc)
                 isStreaming = true
@@ -153,6 +152,22 @@ class MainActivity : AppCompatActivity() {
                     val index = fpsChoices.indexOf(fps.toString())
                     if (index >= 0 && fpsSpinner.selectedItemPosition != index) {
                         fpsSpinner.setSelection(index)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        settingsManager.httpsRunning.observe(this) { httpsRunning ->
+            runOnUiThread {
+                try {
+                    val httpsServerButton = findViewById<Button>(R.id.httpsServerButton)
+                    val httpsServerStatus = findViewById<TextView>(R.id.httpsServerStatus)
+                    httpsServerButton.text = if (httpsRunning) "Stop HTTPS Server" else "Start HTTPS Server"
+                    httpsServerStatus.text = if (httpsRunning) {
+                        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        val port = prefs.getInt("httpsServerPort", 8443)
+                        "Server running on port $port\nAccess at: http://"+settingsManager.host.value+":"+settingsManager.port.value
+                    } else {
+                        "Server stopped"
                     }
                 } catch (_: Exception) {}
             }

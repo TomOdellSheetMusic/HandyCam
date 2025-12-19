@@ -22,6 +22,8 @@ class SettingsManager private constructor(context: Context) {
     private val _isStreaming = MutableLiveData<Boolean>(false)
     val isStreaming: LiveData<Boolean> get() = _isStreaming
 
+    private val _httpsRunning = MutableLiveData<Boolean>(false)
+    val httpsRunning: LiveData<Boolean> get() = _httpsRunning
     // Camera selection
     private val _camera = MutableLiveData<String>("back")
     val camera: LiveData<String> get() = _camera

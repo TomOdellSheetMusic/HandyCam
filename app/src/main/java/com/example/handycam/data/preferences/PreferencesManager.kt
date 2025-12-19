@@ -34,6 +34,7 @@ class PreferencesManager(private val context: Context) {
         val USE_AVC = booleanPreferencesKey("use_avc")
         val AVC_BITRATE = intPreferencesKey("avc_bitrate")
         val IS_STREAMING = booleanPreferencesKey("is_streaming")
+        val HTTPS_RUNNING = booleanPreferencesKey("https_running")
     }
 
     /**
@@ -101,7 +102,11 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferenceKeys.IS_STREAMING] = isStreaming
         }
     }
-
+    suspend fun updateHttpsRunningState(isRunning: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[PreferenceKeys.HTTPS_RUNNING] = isRunning
+        }
+    }
     suspend fun updateStreamConfig(config: StreamConfig) {
         dataStore.edit { preferences ->
             preferences[PreferenceKeys.WIDTH] = config.width
