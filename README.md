@@ -5,7 +5,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 ## Features
 - Select any quality settings your camera supports
 - Stream low latency video to OBS
-- Remotely start/stop the stream and control the camera settings user a webinterface or the restAPI
+- Remotely start/stop the stream and control the camera settings using the webinterface or the restAPI
 - Runs in the background with the screen off
 - Connection over Wifi or USB (USB Debugging has to be enabled on the phone)
   
