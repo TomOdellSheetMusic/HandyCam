@@ -167,7 +167,7 @@ class MainActivity : AppCompatActivity() {
                     httpsServerStatus.text = if (httpsRunning) {
                         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                         val port = prefs.getInt("httpsServerPort", 8443)
-                        "Server running on port $port\nAccess at: http://"+settingsManager.host.value+":"+settingsManager.port.value
+                        "Server running on port $port\nAccess at: https://"+settingsManager.host.value+":"+settingsManager.port.value
                     } else {
                         "Server stopped"
                     }
