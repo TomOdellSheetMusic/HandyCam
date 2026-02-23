@@ -75,6 +75,15 @@ class SettingsManager private constructor(context: Context) {
     private val _autoExposure = MutableLiveData<Boolean>(true)
     val autoExposure: LiveData<Boolean> get() = _autoExposure
 
+    // Zoom (linear 0.0 to 1.0, where 0 = min zoom, 1 = max zoom)
+    private val _zoom = MutableLiveData<Float>(0f)
+    val zoom: LiveData<Float> get() = _zoom
+
+    // White balance mode (Camera2 CaptureRequest.CONTROL_AWB_MODE_* constants)
+    // 1=Auto, 2=Daylight, 3=Incandescent, 4=Fluorescent, 8=Cloudy, 9=Shade
+    private val _whiteBalance = MutableLiveData<Int>(1)
+    val whiteBalance: LiveData<Int> get() = _whiteBalance
+
     // Update methods
     fun setStreaming(value: Boolean) {
         if (Looper.myLooper() == Looper.getMainLooper()) _isStreaming.value = value else _isStreaming.postValue(value)
@@ -135,5 +144,14 @@ class SettingsManager private constructor(context: Context) {
 
     fun setAutoExposure(value: Boolean) {
         if (Looper.myLooper() == Looper.getMainLooper()) _autoExposure.value = value else _autoExposure.postValue(value)
+    }
+
+    fun setZoom(value: Float) {
+        val v = value.coerceIn(0f, 1f)
+        if (Looper.myLooper() == Looper.getMainLooper()) _zoom.value = v else _zoom.postValue(v)
+    }
+
+    fun setWhiteBalance(mode: Int) {
+        if (Looper.myLooper() == Looper.getMainLooper()) _whiteBalance.value = mode else _whiteBalance.postValue(mode)
     }
 }

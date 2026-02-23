@@ -141,6 +141,7 @@ class MainActivity : AppCompatActivity() {
         val wasStreaming = prefs.getBoolean("isStreaming", false)
         isStreaming = wasStreaming
         binding.startButton.text = if (isStreaming) getString(R.string.stop_server) else getString(R.string.start_server)
+        binding.previewButton.visibility = if (isStreaming) android.view.View.VISIBLE else android.view.View.GONE
 
         registerStreamStateReceiver()
         
@@ -303,6 +304,7 @@ class MainActivity : AppCompatActivity() {
                 val running = intent?.getBooleanExtra("isStreaming", false) ?: false
                 isStreaming = running
                 binding.startButton.text = if (running) getString(R.string.stop_server) else getString(R.string.start_server)
+                binding.previewButton.visibility = if (running) android.view.View.VISIBLE else android.view.View.GONE
             }
         }
         val intentFilter = android.content.IntentFilter("com.example.handycam.STREAM_STATE")

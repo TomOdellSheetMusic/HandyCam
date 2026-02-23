@@ -42,7 +42,7 @@
         <activity
             android:name=".CameraControlActivity"
             android:exported="false"
-            android:screenOrientation="portrait" />
+            android:screenOrientation="fullSensor" />
     </application>
 
 </manifest>

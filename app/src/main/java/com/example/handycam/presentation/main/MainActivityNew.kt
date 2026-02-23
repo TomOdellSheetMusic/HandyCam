@@ -298,6 +298,7 @@ class MainActivityNew : AppCompatActivity() {
 
     private fun updateStreamingButton(isStreaming: Boolean) {
         binding.startButton.text = if (isStreaming) "Stop Server" else "Start Server"
+        binding.previewButton.visibility = if (isStreaming) android.view.View.VISIBLE else android.view.View.GONE
     }
 
     private fun updateResolution() {

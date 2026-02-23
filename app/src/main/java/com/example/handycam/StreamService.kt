@@ -117,6 +117,12 @@ class StreamService : LifecycleService() {
             settingsManager.autoFocus.observe(this) { af ->
                 try { applyAutoFocus(af) } catch (e: Exception) { Log.e(TAG, "applyAutoFocus observer error", e) }
             }
+            settingsManager.zoom.observe(this) { v ->
+                try { applyZoom(v) } catch (e: Exception) { Log.e(TAG, "applyZoom observer error", e) }
+            }
+            settingsManager.whiteBalance.observe(this) { v ->
+                try { applyWhiteBalance(v) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalance observer error", e) }
+            }
         } catch (_: Exception) {}
     }
 
@@ -392,6 +398,69 @@ class StreamService : LifecycleService() {
         }
     }
 
+    private fun applyZoom(linearZoom: Float) {
+        try {
+            if (!useAvc) {
+                SharedSurfaceProvider.cameraControl?.setLinearZoom(linearZoom)
+                Log.i(TAG, "Applied zoom via CameraControl: $linearZoom")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val camId = findCameraId(selectedCamera) ?: return@post
+                        val chars = cameraManager?.getCameraCharacteristics(camId) ?: return@post
+                        val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
+                        val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+                        val zoomRatio = 1f + (maxZoom - 1f) * linearZoom
+                        val cropW = (sensorSize.width() / zoomRatio).toInt()
+                        val cropH = (sensorSize.height() / zoomRatio).toInt()
+                        val cropX = (sensorSize.width() - cropW) / 2
+                        val cropY = (sensorSize.height() - cropH) / 2
+                        val cropRegion = android.graphics.Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied zoom via Camera2: ratio=$zoomRatio")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply zoom on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyZoom error", e)
+        }
+    }
+
+    private fun applyWhiteBalance(mode: Int) {
+        try {
+            if (!useAvc) {
+                Log.i(TAG, "WB change requested for CameraX path (no-op without Camera2Interop)")
+            } else {
+                cameraHandler?.post {
+                    try {
+                        val cam = cameraDevice ?: return@post
+                        val session = captureSession ?: return@post
+                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        encoderInputSurface?.let { builder.addTarget(it) }
+                        imageReader?.surface?.let { builder.addTarget(it) }
+                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        builder.set(CaptureRequest.CONTROL_AWB_MODE, mode)
+                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        Log.i(TAG, "Applied WB via Camera2: mode=$mode")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to apply WB on Camera2", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyWhiteBalance error", e)
+        }
+    }
+
     private fun createNotificationChannel() {
         // Create the NotificationChannel, but only on API 26+ because
         // the NotificationChannel class is not in the Support Library.
@@ -450,7 +519,10 @@ class StreamService : LifecycleService() {
                 this@StreamService.cameraProvider = cameraProvider
 
                 val analysisUseCase = ImageAnalysis.Builder()
-                    .setTargetResolution(android.util.Size(width, height))
+                    .setTargetResolution(android.util.Size(
+                        if (width > height) width else height,  // always pass landscape to CameraX
+                        if (width > height) height else width
+                    ))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
@@ -908,20 +980,26 @@ class StreamService : LifecycleService() {
         var chosenHeight = reqHeight
         try {
             val chars = cameraManager?.getCameraCharacteristics(camId)
+            // Camera2 output sizes are always in sensor (landscape) orientation.
+            // Swap the requested dimensions so we find the right match.
+            val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val swapDimensions = sensorOrientation == 90 || sensorOrientation == 270
+            val nativeReqWidth  = if (swapDimensions && reqWidth < reqHeight) reqHeight else reqWidth
+            val nativeReqHeight = if (swapDimensions && reqWidth < reqHeight) reqWidth  else reqHeight
             val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest by area
+                    // find exact match or choose closest by area preserving aspect ratio
                     var chosen = sizes[0]
-                    var bestDiff = Math.abs(chosen.width * chosen.height - reqWidth * reqHeight)
+                    var bestDiff = Math.abs(chosen.width * chosen.height - nativeReqWidth * nativeReqHeight)
                     for (s in sizes) {
-                        if (s.width == reqWidth && s.height == reqHeight) {
+                        if (s.width == nativeReqWidth && s.height == nativeReqHeight) {
                             chosen = s
                             bestDiff = 0
                             break
                         }
-                        val diff = Math.abs(s.width * s.height - reqWidth * reqHeight)
+                        val diff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
                         if (diff < bestDiff) {
                             bestDiff = diff
                             chosen = s
