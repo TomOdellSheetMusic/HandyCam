@@ -44,7 +44,6 @@ import android.view.Surface
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraAccessException
 import android.graphics.SurfaceTexture
-
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
@@ -98,6 +97,9 @@ class StreamService : LifecycleService() {
     private var previewSurface: Surface? = null
     private var previewUseCase: androidx.camera.core.Preview? = null
     private lateinit var settingsManager: SettingsManager
+
+    // mDNS / NSD for DroidCam OBS plugin discovery
+    private var mdnsResponder: MdnsResponder? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -168,6 +170,7 @@ class StreamService : LifecycleService() {
                     return START_NOT_STICKY
                 }
                 startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc)
+                registerMdns(port)
                 // notify UI and persist state that streaming started
                 try {
                     notifyStreamingState(true)
@@ -195,6 +198,7 @@ class StreamService : LifecycleService() {
             }
             ACTION_STOP -> {
                 settingsManager.setStreaming(false)
+                unregisterMdns()
                 stopStreaming()
                 stopForeground(true)
                 stopSelf()
@@ -209,6 +213,11 @@ class StreamService : LifecycleService() {
     override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
+    }
+
+    override fun onDestroy() {
+        unregisterMdns()
+        super.onDestroy()
     }
 
     private fun buildNotification(text: String) = run {
@@ -459,6 +468,19 @@ class StreamService : LifecycleService() {
         } catch (e: Exception) {
             Log.e(TAG, "applyWhiteBalance error", e)
         }
+    }
+
+    private fun registerMdns(port: Int) {
+        try {
+            mdnsResponder = MdnsResponder(this, port).also { it.start() }
+        } catch (e: Exception) {
+            Log.e(TAG, "mDNS start error", e)
+        }
+    }
+
+    private fun unregisterMdns() {
+        mdnsResponder?.stop()
+        mdnsResponder = null
     }
 
     private fun createNotificationChannel() {
