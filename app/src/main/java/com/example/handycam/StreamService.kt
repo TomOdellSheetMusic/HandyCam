@@ -503,19 +503,22 @@ class StreamService : LifecycleService() {
     private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean) {
         if (running) return
         running = true
+        // Always stream in landscape — swap if portrait dimensions were passed
+        val w = maxOf(width, height)
+        val h = minOf(width, height)
         // store runtime options
         selectedCamera = camera
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
-        requestedWidth = width
-        requestedHeight = height
+        requestedWidth = w
+        requestedHeight = h
 
         if (useAvc) {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
             // camera output size and call setupEncoder(...) with a compatible size.
             try {
-                startCamera2ToEncoder(width, height, targetFps)
+                startCamera2ToEncoder(w, h, targetFps)
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
@@ -541,10 +544,10 @@ class StreamService : LifecycleService() {
                 this@StreamService.cameraProvider = cameraProvider
 
                 val analysisUseCase = ImageAnalysis.Builder()
-                    .setTargetResolution(android.util.Size(
-                        if (width > height) width else height,  // always pass landscape to CameraX
-                        if (width > height) height else width
-                    ))
+                    // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
+                    // space regardless of phone orientation — ensures consistent landscape output
+                    .setTargetRotation(android.view.Surface.ROTATION_90)
+                    .setTargetResolution(android.util.Size(w, h))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
