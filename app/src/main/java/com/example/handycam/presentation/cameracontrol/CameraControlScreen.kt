@@ -199,7 +199,7 @@ fun CameraControlScreen(
             ) {
                 TextButton(
                     onClick = { cameraDropdownOpen = true },
-                    modifier = Modifier.menuAnchor()
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
                 ) {
                     Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color.White,
                         modifier = Modifier.size(16.dp))

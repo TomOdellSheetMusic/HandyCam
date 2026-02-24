@@ -83,7 +83,7 @@ class KtorHttpsServerService : LifecycleService() {
             }
             ACTION_STOP_SERVER -> {
                 stopHttpsServer()
-                stopForeground(true)
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
@@ -214,43 +214,57 @@ class KtorHttpsServerService : LifecycleService() {
                     <!DOCTYPE html>
                     <html>
                     <head>
-                        <title>HandyCam HTTPS Server</title>
+                        <title>HandyCam</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
                         <style>
-                            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-                            .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                            h1 { color: #333; }
-                            .endpoint { background: #f8f8f8; padding: 10px; margin: 10px 0; border-left: 3px solid #4CAF50; }
-                            code { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; }
+                            *, *::before, *::after { box-sizing: border-box; }
+                            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f0f0f0; color: #1a1a1a; }
+                            .container { max-width: 520px; margin: 0 auto; }
+                            h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 4px; }
+                            p { margin: 0 0 20px; font-size: 0.85rem; color: #666; }
+                            .card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+                            .card-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #666; margin: 0 0 10px; }
+                            .endpoint { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.875rem; margin: 6px 0; }
+                            .method { font-weight: 600; color: #1a73e8; }
+                            .path { color: #1a1a1a; }
+                            .desc { grid-column: 2; color: #666; font-size: 0.8rem; }
+                            a { color: #1a73e8; }
                         </style>
                     </head>
                     <body>
                         <div class="container">
-                            <h1>🚀 HandyCam HTTPS Server</h1>
-                            <p>Server is running successfully!</p>
-                            <h2>Available Endpoints:</h2>
-                            <div class="endpoint">
-                                <strong>GET /</strong> - This welcome page
+                            <h1>HandyCam</h1>
+                            <p>HTTPS Control Server</p>
+                            <div class="card">
+                                <div class="card-title">Web UI</div>
+                                <a href="/camera">Open Camera Control</a>
                             </div>
-                            <div class="endpoint">
-                                <strong>GET /status</strong> - Server status (JSON)
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /info</strong> - Server information (JSON)
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /health</strong> - Health check
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /camera</strong> - Camera control web UI
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/start</strong> - Start camera streaming
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/stop</strong> - Stop camera streaming
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/switch</strong> - Switch camera (body: {"camera": "back|front"})
+                            <div class="card">
+                                <div class="card-title">API Endpoints</div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/status</span>
+                                    <span class="desc">Server status (JSON)</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/info</span>
+                                    <span class="desc">Server information (JSON)</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/health</span>
+                                    <span class="desc">Health check</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/start</span>
+                                    <span class="desc">Start camera streaming</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/stop</span>
+                                    <span class="desc">Stop camera streaming</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/switch</span>
+                                    <span class="desc">Switch camera — body: {"camera": "back|front"}</span>
+                                </div>
                             </div>
                         </div>
                     </body>

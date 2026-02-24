@@ -19,6 +19,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -212,7 +214,7 @@ class StreamService : LifecycleService() {
                 streamStateHolder.setStreaming(false)
                 unregisterMdns()
                 stopStreaming()
-                stopForeground(true)
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
             else -> {
@@ -555,12 +557,21 @@ class StreamService : LifecycleService() {
                     // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
                     // space regardless of phone orientation — ensures consistent landscape output
                     .setTargetRotation(android.view.Surface.ROTATION_90)
-                    .setTargetResolution(android.util.Size(w, h))
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    android.util.Size(w, h),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                                )
+                            )
+                            .build()
+                    )
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
                 cameraExecutor = Executors.newSingleThreadExecutor()
-                analysisUseCase.setAnalyzer(cameraExecutor) { image ->
+                analysisUseCase.setAnalyzer(cameraExecutor!!) { image ->
                     // compress on the camera executor to avoid blocking UI
                     handleImageProxy(image)
                 }
@@ -738,7 +749,7 @@ class StreamService : LifecycleService() {
                 try {
                     val codec = encoder ?: return@Thread
                     val info = BufferInfo()
-                    while (running && codec != null && encoderOutputRunning) {
+                    while (running && encoderOutputRunning) {
                         // short timeout so we drain quickly and avoid encoder internal backlog
                         val outIndex = try { codec.dequeueOutputBuffer(info, 200) } catch (e: Exception) { -1 }
                         if (outIndex >= 0) {
@@ -1103,11 +1114,10 @@ class StreamService : LifecycleService() {
                             try { img?.close() } catch (_: Exception) {}
                         }, cameraHandler)
 
-                        builder.addTarget(surface)
                         val targets = mutableListOf(surface, ir.surface)
                         cameraStateHolder.previewSurface?.let { targets.add(it) }
-                        
-                        camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
+
+                        val sessionCb = object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 captureSession = session
                                 try {
@@ -1130,7 +1140,14 @@ class StreamService : LifecycleService() {
                             override fun onConfigureFailed(session: CameraCaptureSession) {
                                 Log.e(TAG, "Camera2 session configuration failed")
                             }
-                        }, cameraHandler)
+                        }
+                        val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
+                            android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                            targets.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                            java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
+                            sessionCb
+                        )
+                        camera.createCaptureSession(sessionConfig)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to create capture request/session", e)
                     }
@@ -1421,7 +1438,7 @@ class StreamService : LifecycleService() {
                 return
             }
             
-            camera.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+            val sessionCb2 = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(newSession: CameraCaptureSession) {
                     captureSession = newSession
                     try {
@@ -1440,7 +1457,14 @@ class StreamService : LifecycleService() {
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Log.e(TAG, "Camera2 session reconfigure failed")
                 }
-            }, cameraHandler)
+            }
+            val reconfigSessionConfig = android.hardware.camera2.params.SessionConfiguration(
+                android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                surfaces.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
+                sessionCb2
+            )
+            camera.createCaptureSession(reconfigSessionConfig)
         } catch (e: Exception) {
             Log.e(TAG, "Error reconfiguring Camera2 session", e)
         }
