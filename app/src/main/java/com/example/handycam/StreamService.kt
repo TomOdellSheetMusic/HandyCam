@@ -51,6 +51,9 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjectionManager
 import android.media.projection.MediaProjection
+import android.media.AudioRecord
+import android.media.AudioFormat
+import android.media.MediaRecorder
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
@@ -107,6 +110,23 @@ class StreamService : LifecycleService() {
     private var screenImageReader: android.media.ImageReader? = null
     private var screenCaptureHandlerThread: HandlerThread? = null
     private var screenCaptureHandler: Handler? = null
+
+    // Audio capture + AAC encode fields
+    private val audioFrameQueue = LinkedBlockingQueue<ByteArray>(8)
+    private var audioConfig: ByteArray? = null
+    private var audioRecord: AudioRecord? = null
+    private var audioEncoder: MediaCodec? = null
+    private var audioEncoderInputThread: Thread? = null
+    private var audioEncoderOutputThread: Thread? = null
+    @Volatile private var audioRunning = false
+
+    private companion object {
+        const val AUDIO_SAMPLE_RATE = 44100
+        const val AUDIO_CHANNELS = 1
+        const val AUDIO_BITRATE = 96_000
+        // Marks an AAC config packet (all-ones PTS = NO_PTS from DroidCam protocol)
+        const val AUDIO_NO_PTS = -1L
+    }
 
     // Preview surface management
     @Volatile
@@ -203,10 +223,15 @@ class StreamService : LifecycleService() {
                     "Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val serviceType = if (useScreenCapture)
+                        val videoType = if (useScreenCapture)
                             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                         else
                             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            videoType or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        } else {
+                            videoType
+                        }
                         startForeground(NOTIF_ID, buildNotification(notifText), serviceType)
                     } else {
                         startForeground(NOTIF_ID, buildNotification(notifText))
@@ -670,6 +695,8 @@ class StreamService : LifecycleService() {
             }
         }
 
+        startAudio()
+
         // Start server thread
         serverThread = Thread {
             try {
@@ -713,6 +740,7 @@ class StreamService : LifecycleService() {
         running = false
         // stop screen capture if active
         stopScreenCapture()
+        stopAudio()
         // stop camera/capture session first to ensure producers stop feeding surfaces
         stopEncoderOutputReader()
         stopCamera2()
@@ -1098,7 +1126,10 @@ class StreamService : LifecycleService() {
                 Log.w(TAG, "Failed to parse request line", e)
             }
 
-            if (req.contains("/v5/video/") || req.contains("/v2/video/") || req.contains("/v1/video/")) {
+            if (req.contains("/v2/audio")) {
+                handleAudioClient(client)
+                return
+            } else if (req.contains("/v5/video/") || req.contains("/v2/video/") || req.contains("/v1/video/")) {
                 val out = client.getOutputStream()
                 val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
                 val pollTimeoutMs = intervalMs
@@ -1164,6 +1195,160 @@ class StreamService : LifecycleService() {
         } finally {
             try { client.close() } catch (_: Exception) {}
             Log.i(TAG, "Client disconnected (service)")
+        }
+    }
+
+    // ----- Audio capture + AAC encode helpers -----
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun startAudio() {
+        if (audioRunning) return
+        try {
+            val minBuf = AudioRecord.getMinBufferSize(
+                AUDIO_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufSize = maxOf(minBuf, 4096)
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                AUDIO_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufSize
+            )
+
+            val format = MediaFormat.createAudioFormat(
+                MediaFormat.MIMETYPE_AUDIO_AAC, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS
+            ).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, bufSize * 2)
+            }
+            audioEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            audioEncoder!!.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            audioEncoder!!.start()
+
+            audioRunning = true
+            audioRecord!!.startRecording()
+            Log.i(TAG, "Audio capture started: ${AUDIO_SAMPLE_RATE}Hz mono ${AUDIO_BITRATE}bps AAC-LC")
+
+            val encoder = audioEncoder!!
+            val record = audioRecord!!
+
+            // Input thread: feed PCM from AudioRecord into the encoder
+            audioEncoderInputThread = Thread {
+                val pcm = ByteArray(bufSize)
+                while (audioRunning) {
+                    val read = record.read(pcm, 0, pcm.size)
+                    if (read <= 0) continue
+                    val idx = encoder.dequeueInputBuffer(10_000)
+                    if (idx >= 0) {
+                        val inBuf = encoder.getInputBuffer(idx) ?: continue
+                        inBuf.clear()
+                        inBuf.put(pcm, 0, read)
+                        encoder.queueInputBuffer(idx, 0, read, System.nanoTime() / 1000, 0)
+                    }
+                }
+            }.also { it.start() }
+
+            // Output thread: drain encoder → audioFrameQueue
+            audioEncoderOutputThread = Thread {
+                val info = BufferInfo()
+                while (audioRunning) {
+                    val outIdx = try {
+                        encoder.dequeueOutputBuffer(info, 10_000)
+                    } catch (e: Exception) { break }
+                    if (outIdx >= 0) {
+                        val outBuf = encoder.getOutputBuffer(outIdx)
+                        val bytes = ByteArray(info.size)
+                        outBuf?.get(bytes)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            audioConfig = bytes
+                            Log.i(TAG, "Got AAC config: ${bytes.size} bytes")
+                        } else if (bytes.isNotEmpty()) {
+                            if (!audioFrameQueue.offer(bytes)) {
+                                audioFrameQueue.poll()
+                                audioFrameQueue.offer(bytes)
+                            }
+                        }
+                        try { encoder.releaseOutputBuffer(outIdx, false) } catch (_: Exception) {}
+                    }
+                }
+            }.also { it.start() }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start audio capture", e)
+            stopAudio()
+        }
+    }
+
+    private fun stopAudio() {
+        audioRunning = false
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+        try { audioEncoderInputThread?.interrupt() } catch (_: Exception) {}
+        try { audioEncoderInputThread?.join(300) } catch (_: Exception) {}
+        audioEncoderInputThread = null
+        try { audioEncoderOutputThread?.interrupt() } catch (_: Exception) {}
+        try { audioEncoderOutputThread?.join(300) } catch (_: Exception) {}
+        audioEncoderOutputThread = null
+        try { audioEncoder?.stop(); audioEncoder?.release() } catch (_: Exception) {}
+        audioEncoder = null
+        audioConfig = null
+        audioFrameQueue.clear()
+    }
+
+    private fun handleAudioClient(client: Socket) {
+        // No soTimeout on audio: we want to block in the frame loop
+        client.soTimeout = 0
+        val out = client.getOutputStream()
+        try {
+            // Wait up to 3s for the AAC config to arrive (encoder starts asynchronously)
+            val deadline = System.currentTimeMillis() + 3000
+            while (audioConfig == null && System.currentTimeMillis() < deadline && running) {
+                Thread.sleep(20)
+            }
+            val config = audioConfig
+            if (config == null) {
+                Log.w(TAG, "Audio: no AAC config available, dropping client")
+                return
+            }
+
+            // Send config packet: PTS=NO_PTS (-1L) + config bytes
+            val cfgHeader = ByteBuffer.allocate(12)
+            cfgHeader.putLong(AUDIO_NO_PTS)
+            cfgHeader.putInt(config.size)
+            out.write(cfgHeader.array())
+            out.write(config)
+            out.flush()
+            Log.i(TAG, "Sent AAC config (${config.size}B) to audio client ${client.inetAddress}")
+
+            // Stream audio frames
+            while (running && !client.isClosed && client.isConnected) {
+                val frame = try {
+                    audioFrameQueue.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) { null }
+                if (frame == null) continue
+
+                val pts = System.currentTimeMillis()
+                val header = ByteBuffer.allocate(12)
+                header.putLong(pts)
+                header.putInt(frame.size)
+                try {
+                    out.write(header.array())
+                    out.write(frame)
+                    out.flush()
+                } catch (_: java.io.IOException) {
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Audio client handler error", e)
+        } finally {
+            try { client.close() } catch (_: Exception) {}
+            Log.i(TAG, "Audio client disconnected")
         }
     }
 
