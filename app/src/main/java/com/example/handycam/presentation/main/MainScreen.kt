@@ -21,12 +21,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.app.Activity
+import android.media.projection.MediaProjectionManager
 
 private val FPS_OPTIONS = listOf("15", "24", "30", "50", "60")
+
+private val SCREEN_SOURCE = com.example.handycam.data.model.CameraInfo(
+    id = "screen", displayName = "Screen Share", facing = "screen"
+)
 
 private data class ResolutionPreset(val label: String, val width: Int, val height: Int)
 private val RESOLUTION_PRESETS = listOf(
@@ -45,6 +54,12 @@ fun MainScreen(
     val isStreaming by viewModel.isStreaming.collectAsState()
     val httpsRunning by viewModel.httpsRunning.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
+    val isScreenStreaming by viewModel.streamStateHolder.useScreenCapture.collectAsState()
+
+    val context = LocalContext.current
+    val mediaProjectionManager = remember {
+        context.getSystemService(MediaProjectionManager::class.java)
+    }
 
     var host by remember { mutableStateOf(viewModel.localIp) }
     var port by remember { mutableStateOf("4747") }
@@ -59,6 +74,40 @@ fun MainScreen(
     var httpsPort by remember { mutableStateOf("8443") }
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
+
+    // Sources shown in the dropdown: real cameras + Screen Share
+    val allSources = remember(cameras) { cameras + SCREEN_SOURCE }
+
+    // Capture resolved (w, h) once so the screen capture launcher can also use it
+    val resolvedWidth by remember { derivedStateOf {
+        if (selectedPreset.label != "Custom") selectedPreset.width
+        else customWidth.toIntOrNull() ?: 1920
+    } }
+    val resolvedHeight by remember { derivedStateOf {
+        if (selectedPreset.label != "Custom") selectedPreset.height
+        else customHeight.toIntOrNull() ?: 1080
+    } }
+
+    // Launcher for MediaProjection consent dialog
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            viewModel.startStreaming(
+                host = host.ifBlank { "0.0.0.0" },
+                port = port.toIntOrNull() ?: 4747,
+                width = resolvedWidth, height = resolvedHeight,
+                camera = "screen",
+                jpegQuality = jpegQuality.toInt(),
+                fps = selectedFps.toIntOrNull() ?: 30,
+                useAvc = useAvc,
+                avcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() },
+                useScreenCapture = true,
+                mediaProjectionResultCode = result.resultCode,
+                mediaProjectionData = result.data
+            )
+        }
+    }
 
     // Pulse animation for live indicator
     val pulse = rememberInfiniteTransition(label = "pulse")
@@ -184,26 +233,26 @@ fun MainScreen(
 
                 Spacer(Modifier.height(4.dp))
 
-                // Camera
+                // Source (camera or screen)
                 ExposedDropdownMenuBox(
                     expanded = cameraDropdownOpen,
                     onExpandedChange = { if (!isStreaming) cameraDropdownOpen = it },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     OutlinedTextField(
-                        value = selectedCamera?.displayName ?: "Select camera",
+                        value = selectedCamera?.displayName ?: "Select source",
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Camera") },
+                        label = { Text("Source") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cameraDropdownOpen) },
                         modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
                         enabled = !isStreaming
                     )
                     ExposedDropdownMenu(expanded = cameraDropdownOpen, onDismissRequest = { cameraDropdownOpen = false }) {
-                        cameras.forEach { cam ->
+                        allSources.forEach { source ->
                             DropdownMenuItem(
-                                text = { Text(cam.displayName) },
-                                onClick = { selectedCamera = cam; cameraDropdownOpen = false }
+                                text = { Text(source.displayName) },
+                                onClick = { selectedCamera = source; cameraDropdownOpen = false }
                             )
                         }
                     }
@@ -254,23 +303,24 @@ fun MainScreen(
             }
 
             // ── Start / Stop ──────────────────────────────────────────
-            val (width, height) = when {
-                selectedPreset.label != "Custom" -> selectedPreset.width to selectedPreset.height
-                else -> (customWidth.toIntOrNull() ?: 1920) to (customHeight.toIntOrNull() ?: 1080)
-            }
+            val isScreenSource = selectedCamera?.id == "screen"
             Button(
                 onClick = {
                     if (isStreaming) viewModel.stopStreaming()
-                    else viewModel.startStreaming(
-                        host = host.ifBlank { "0.0.0.0" },
-                        port = port.toIntOrNull() ?: 4747,
-                        width = width, height = height,
-                        camera = selectedCamera?.id ?: "back",
-                        jpegQuality = jpegQuality.toInt(),
-                        fps = selectedFps.toIntOrNull() ?: 30,
-                        useAvc = useAvc,
-                        avcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() }
-                    )
+                    else if (isScreenSource) {
+                        screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                    } else {
+                        viewModel.startStreaming(
+                            host = host.ifBlank { "0.0.0.0" },
+                            port = port.toIntOrNull() ?: 4747,
+                            width = resolvedWidth, height = resolvedHeight,
+                            camera = selectedCamera?.id ?: "back",
+                            jpegQuality = jpegQuality.toInt(),
+                            fps = selectedFps.toIntOrNull() ?: 30,
+                            useAvc = useAvc,
+                            avcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() }
+                        )
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 colors = if (isStreaming) ButtonDefaults.buttonColors(
@@ -286,7 +336,7 @@ fun MainScreen(
                     style = MaterialTheme.typography.labelLarge)
             }
 
-            AnimatedVisibility(visible = isStreaming) {
+            AnimatedVisibility(visible = isStreaming && !isScreenStreaming) {
                 OutlinedButton(
                     onClick = onNavigateToCameraControl,
                     modifier = Modifier.fillMaxWidth()

@@ -55,7 +55,10 @@ class MainViewModel @Inject constructor(
         jpegQuality: Int,
         fps: Int,
         useAvc: Boolean,
-        avcBitrate: Int? = null
+        avcBitrate: Int? = null,
+        useScreenCapture: Boolean = false,
+        mediaProjectionResultCode: Int = 0,
+        mediaProjectionData: android.content.Intent? = null
     ) {
         viewModelScope.launch {
             val config = StreamConfig(width, height, camera, jpegQuality, fps, useAvc, avcBitrate)
@@ -72,6 +75,11 @@ class MainViewModel @Inject constructor(
                 putExtra("targetFps", fps)
                 putExtra("useAvc", useAvc)
                 avcBitrate?.let { putExtra("avcBitrate", it) }
+                putExtra("useScreenCapture", useScreenCapture)
+                if (useScreenCapture) {
+                    putExtra("mediaProjectionResultCode", mediaProjectionResultCode)
+                    putExtra("mediaProjectionData", mediaProjectionData)
+                }
             }
             context.startForegroundService(intent)
         }

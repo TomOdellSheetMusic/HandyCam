@@ -48,6 +48,9 @@ class StreamStateHolder @Inject constructor() {
     private val _avcBitrate = MutableStateFlow(-1)
     val avcBitrate: StateFlow<Int> = _avcBitrate.asStateFlow()
 
+    private val _useScreenCapture = MutableStateFlow(false)
+    val useScreenCapture: StateFlow<Boolean> = _useScreenCapture.asStateFlow()
+
     // Camera controls (observed by StreamService to apply live changes)
     private val _torchEnabled = MutableStateFlow(false)
     val torchEnabled: StateFlow<Boolean> = _torchEnabled.asStateFlow()
@@ -82,6 +85,7 @@ class StreamStateHolder @Inject constructor() {
     fun setJpegQuality(value: Int) { _jpegQuality.value = value }
     fun setUseAvc(value: Boolean) { _useAvc.value = value }
     fun setAvcBitrate(value: Int) { _avcBitrate.value = value }
+    fun setUseScreenCapture(value: Boolean) { _useScreenCapture.value = value }
     fun setTorchEnabled(value: Boolean) { _torchEnabled.value = value }
     fun setAutoFocus(value: Boolean) { _autoFocus.value = value }
     fun setExposure(value: Int) { _exposure.value = value }

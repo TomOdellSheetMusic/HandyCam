@@ -46,6 +46,11 @@ import android.view.Surface
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraAccessException
 import android.graphics.SurfaceTexture
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.media.projection.MediaProjectionManager
+import android.media.projection.MediaProjection
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
@@ -95,6 +100,14 @@ class StreamService : LifecycleService() {
     private var analysisUseCase: ImageAnalysis? = null
     private var cameraExecutor: java.util.concurrent.ExecutorService? = null
     
+    // Screen capture fields
+    private var useScreenCapture: Boolean = false
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
+    private var screenImageReader: android.media.ImageReader? = null
+    private var screenCaptureHandlerThread: HandlerThread? = null
+    private var screenCaptureHandler: Handler? = null
+
     // Preview surface management
     @Volatile
     private var previewSurface: Surface? = null
@@ -156,6 +169,14 @@ class StreamService : LifecycleService() {
                 useAvc = intent.getBooleanExtra("useAvc", false)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
+                useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                val mpResultCode = intent.getIntExtra("mediaProjectionResultCode", 0)
+                @Suppress("DEPRECATION")
+                val mpData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra("mediaProjectionData", Intent::class.java)
+                } else {
+                    intent.getParcelableExtra("mediaProjectionData")
+                }
 
                 // Update state holder
                 streamStateHolder.setStreaming(true)
@@ -167,6 +188,7 @@ class StreamService : LifecycleService() {
                 streamStateHolder.setFps(targetFps)
                 streamStateHolder.setUseAvc(useAvc)
                 streamStateHolder.setHost(host)
+                streamStateHolder.setUseScreenCapture(useScreenCapture)
 
                 // Save streaming state to preferences
                 getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
@@ -175,15 +197,27 @@ class StreamService : LifecycleService() {
                     .putString("camera", selectedCamera)
                     .apply()
                 
+                val notifText = if (useScreenCapture)
+                    "Streaming screen on $port — fps=$targetFps"
+                else
+                    "Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"
                 try {
-                    startForeground(NOTIF_ID, buildNotification("Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val serviceType = if (useScreenCapture)
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                        else
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        startForeground(NOTIF_ID, buildNotification(notifText), serviceType)
+                    } else {
+                        startForeground(NOTIF_ID, buildNotification(notifText))
+                    }
                 } catch (se: SecurityException) {
-                    Log.e(TAG, "Unable to start foreground service with camera type: missing permission", se)
-                    // Stop service to avoid repeatedly failing; caller should request the permission.
+                    Log.e(TAG, "Unable to start foreground service: missing permission", se)
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc)
+                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
+                    useScreenCapture, mpResultCode, mpData)
                 registerMdns(port)
                 // notify UI and persist state that streaming started
                 try {
@@ -510,7 +544,7 @@ class StreamService : LifecycleService() {
         }
     }
 
-    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean) {
+    private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean, screenCapture: Boolean = false, mpResultCode: Int = 0, mpData: Intent? = null) {
         if (running) return
         running = true
         // Always stream in landscape — swap if portrait dimensions were passed
@@ -521,10 +555,27 @@ class StreamService : LifecycleService() {
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
+        useScreenCapture = screenCapture
         requestedWidth = w
         requestedHeight = h
 
-        if (useAvc) {
+        if (useScreenCapture) {
+            if (useAvc) {
+                try {
+                    setupEncoder(w, h, targetFps)
+                    startEncoderOutputReader()
+                    startScreenCaptureAvc(mpResultCode, mpData!!)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start screen capture AVC pipeline", e)
+                }
+            } else {
+                try {
+                    startScreenCaptureMjpeg(mpResultCode, mpData!!, w, h)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start screen capture MJPEG pipeline", e)
+                }
+            }
+        } else if (useAvc) {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
             // camera output size and call setupEncoder(...) with a compatible size.
             try {
@@ -660,6 +711,8 @@ class StreamService : LifecycleService() {
 
     private fun stopStreaming() {
         running = false
+        // stop screen capture if active
+        stopScreenCapture()
         // stop camera/capture session first to ensure producers stop feeding surfaces
         stopEncoderOutputReader()
         stopCamera2()
@@ -703,6 +756,120 @@ class StreamService : LifecycleService() {
             val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
             prefs.edit().putBoolean("isStreaming", false).apply()
         } catch (_: Exception) {}
+    }
+
+    // ── Screen capture helpers ──────────────────────────────────────────────
+
+    private fun startScreenCaptureMjpeg(resultCode: Int, data: Intent, w: Int, h: Int) {
+        val mgr = getSystemService(MediaProjectionManager::class.java)
+        mediaProjection = mgr.getMediaProjection(resultCode, data)
+
+        val density = resources.displayMetrics.densityDpi
+
+        screenCaptureHandlerThread = HandlerThread("ScreenCaptureThread").also { it.start() }
+        screenCaptureHandler = Handler(screenCaptureHandlerThread!!.looper)
+
+        // Android 14+ requires a callback to be registered before createVirtualDisplay
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
+                override fun onStop() {
+                    Log.i(TAG, "MediaProjection stopped by system")
+                    if (running) stopStreaming()
+                }
+            }, screenCaptureHandler)
+        }
+
+        screenImageReader = android.media.ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+        screenImageReader!!.setOnImageAvailableListener({ reader ->
+            val image = try { reader.acquireLatestImage() } catch (_: Exception) { return@setOnImageAvailableListener }
+            if (image == null) return@setOnImageAvailableListener
+            try {
+                val plane = image.planes[0]
+                val buffer = plane.buffer
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
+                val rowPadding = rowStride - pixelStride * w
+
+                val bitmapWidth = w + rowPadding / pixelStride
+                val bitmap = Bitmap.createBitmap(bitmapWidth, h, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(buffer)
+
+                val finalBitmap = if (bitmapWidth > w) {
+                    Bitmap.createBitmap(bitmap, 0, 0, w, h).also { bitmap.recycle() }
+                } else bitmap
+
+                val baos = java.io.ByteArrayOutputStream()
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, jpegQuality.coerceIn(10, 100), baos)
+                finalBitmap.recycle()
+
+                val jpeg = baos.toByteArray()
+                if (!frameQueue.offer(jpeg)) {
+                    frameQueue.poll()
+                    frameQueue.offer(jpeg)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Screen capture frame error", e)
+            } finally {
+                image.close()
+            }
+        }, screenCaptureHandler)
+
+        val displayFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+        virtualDisplay = mediaProjection!!.createVirtualDisplay(
+            "HandyCamScreen", w, h, density,
+            displayFlags,
+            screenImageReader!!.surface, null, screenCaptureHandler
+        )
+        Log.i(TAG, "Screen capture MJPEG started: ${w}x${h} density=$density")
+    }
+
+    private fun startScreenCaptureAvc(resultCode: Int, data: Intent) {
+        val mgr = getSystemService(MediaProjectionManager::class.java)
+        mediaProjection = mgr.getMediaProjection(resultCode, data)
+
+        val density = resources.displayMetrics.densityDpi
+        val surface = encoderInputSurface ?: run {
+            Log.e(TAG, "Encoder input surface is null for screen capture AVC")
+            return
+        }
+
+        // Android 14+ requires a callback to be registered before createVirtualDisplay
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            if (screenCaptureHandlerThread == null) {
+                screenCaptureHandlerThread = HandlerThread("ScreenCaptureThread").also { it.start() }
+                screenCaptureHandler = Handler(screenCaptureHandlerThread!!.looper)
+            }
+            mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
+                override fun onStop() {
+                    Log.i(TAG, "MediaProjection stopped by system")
+                    if (running) stopStreaming()
+                }
+            }, screenCaptureHandler!!)
+        }
+
+        val displayFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+        virtualDisplay = mediaProjection!!.createVirtualDisplay(
+            "HandyCamScreen", encoderWidth, encoderHeight, density,
+            displayFlags,
+            surface, null, null
+        )
+        Log.i(TAG, "Screen capture AVC started: ${encoderWidth}x${encoderHeight} density=$density")
+    }
+
+    private fun stopScreenCapture() {
+        try { virtualDisplay?.release() } catch (_: Exception) {}
+        virtualDisplay = null
+        try { screenImageReader?.close() } catch (_: Exception) {}
+        screenImageReader = null
+        try { mediaProjection?.stop() } catch (_: Exception) {}
+        mediaProjection = null
+        try { screenCaptureHandlerThread?.quitSafely() } catch (_: Exception) {}
+        screenCaptureHandlerThread = null
+        screenCaptureHandler = null
+        useScreenCapture = false
+        streamStateHolder.setUseScreenCapture(false)
     }
 
       private fun setupEncoder(width: Int, height: Int, fps: Int) {
