@@ -66,9 +66,9 @@ private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_
 
 @dagger.hilt.android.AndroidEntryPoint
 class StreamService : LifecycleService() {
-    // keep only the latest frame to minimize latency
-    // keep a tiny buffer to reduce tearing when encoder/consumer timing is slightly off
-    private val frameQueue = LinkedBlockingQueue<ByteArray>(2)
+    // AVC needs a deeper queue to absorb I-frame bursts without dropping reference frames.
+    // MJPEG only ever needs the latest frame, but we share one queue so use the larger size.
+    private val frameQueue = LinkedBlockingQueue<ByteArray>(16)
     private var encoderDroppedFrames = 0
     private var serverThread: Thread? = null
     private var running = false
@@ -910,17 +910,15 @@ class StreamService : LifecycleService() {
         val defaultBitrate = ((width.toLong() * height.toLong() * fps) / 6).toInt().coerceAtLeast(800_000)
         val bitrate = avcBitrateUser ?: defaultBitrate
         val format = MediaFormat.createVideoFormat(mime, width, height).apply {
-            // use input surface path
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            // Shorter I-frame interval = faster recovery from dropped/corrupt frames
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
             try {
-                // prefer VBR for better visual quality; if not supported fall back gracefully
-                setInteger(MediaFormat.KEY_BITRATE_MODE, android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            } catch (_: Exception) {
-                // ignore if not supported
-            }
+                // CBR keeps bitrate predictable so the frame queue doesn't burst-overflow
+                setInteger(MediaFormat.KEY_BITRATE_MODE, android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            } catch (_: Exception) {}
         }
 
         encoder = MediaCodec.createEncoderByType(mime)
@@ -1136,8 +1134,9 @@ class StreamService : LifecycleService() {
                 val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
                 val pollTimeoutMs = intervalMs
                 try {
+                    val isAvcClient = requestedFormat.startsWith("avc")
                     // if client requested AVC and we have codec config, send config packet first
-                    if (requestedFormat.startsWith("avc") && avcConfig != null) {
+                    if (isAvcClient && avcConfig != null) {
                         val cfgHeader = ByteBuffer.allocate(12)
                         cfgHeader.putLong(-1L)
                         cfgHeader.putInt(avcConfig!!.size)
@@ -1145,6 +1144,12 @@ class StreamService : LifecycleService() {
                         out.write(avcConfig)
                         out.flush()
                         Log.i(TAG, "Sent AVC config to client ${client.inetAddress}")
+                        // request a keyframe so the new client can start decoding immediately
+                        try {
+                            val params = android.os.Bundle()
+                            params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                            encoder?.setParameters(params)
+                        } catch (_: Exception) {}
                     }
 
                     var lastSent = 0L
@@ -1159,12 +1164,17 @@ class StreamService : LifecycleService() {
                             continue
                         }
 
-                        val now = System.currentTimeMillis()
-                        if (now - lastSent < intervalMs) {
-                            continue
+                        // For AVC every encoded frame is part of the bitstream and must be sent —
+                        // skipping P-frames causes the decoder to lose reference frames → macroblocking.
+                        // Only throttle for MJPEG where each frame is fully independent.
+                        if (!isAvcClient) {
+                            val now = System.currentTimeMillis()
+                            if (now - lastSent < intervalMs) {
+                                continue
+                            }
                         }
 
-                        val pts = now
+                        val pts = System.currentTimeMillis()
                         val header = ByteBuffer.allocate(12)
                         header.putLong(pts)
                         header.putInt(frame.size)
@@ -1173,7 +1183,7 @@ class StreamService : LifecycleService() {
                             out.write(header.array())
                             out.write(frame)
                             out.flush()
-                            lastSent = now
+                            lastSent = pts
                         } catch (se: java.net.SocketException) {
                             Log.i(TAG, "Socket closed by peer while writing: ${se.message}")
                             break
