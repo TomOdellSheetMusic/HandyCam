@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.*
@@ -100,7 +101,7 @@ fun MainScreen(
         ) {
             // ── Connection ────────────────────────────────────────────
             SectionCard(title = "Connection") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = host,
                         onValueChange = { host = it },
@@ -109,7 +110,15 @@ fun MainScreen(
                         modifier = Modifier.weight(2f),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        enabled = !isStreaming
+                        enabled = !isStreaming,
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { host = viewModel.localIp },
+                                enabled = !isStreaming
+                            ) {
+                                Icon(Icons.Filled.Refresh, contentDescription = "Refresh IP", modifier = Modifier.size(18.dp))
+                            }
+                        }
                     )
                     OutlinedTextField(
                         value = port,
