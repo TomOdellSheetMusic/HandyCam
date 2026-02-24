@@ -56,7 +56,6 @@ android {
     }
     buildFeatures {
         compose = true
-        viewBinding = true
     }
 }
 
@@ -65,9 +64,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     
-    // ViewPager2 and Material (TabLayout)
-    implementation("androidx.viewpager2:viewpager2:1.1.0")
-    implementation("com.google.android.material:material:1.10.0")
+    // ViewPager2 and Material (TabLayout) — removed, using Compose tabs
+    // implementation("androidx.viewpager2:viewpager2:1.1.0")
+    // implementation("com.google.android.material:material:1.10.0")
     
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
@@ -101,9 +100,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
     
-    // Navigation Component
-    implementation("androidx.navigation:navigation-fragment-ktx:2.8.4")
-    implementation("androidx.navigation:navigation-ui-ktx:2.8.4")
+    // Navigation Compose
+    implementation("androidx.navigation:navigation-compose:2.8.4")
+    
+    // Compose Foundation (HorizontalPager, TabRow) — included via BOM
+    implementation("androidx.compose.material:material-icons-extended")
     
     // Ktor Server for HTTPS
     implementation("io.ktor:ktor-server-core:2.3.7")

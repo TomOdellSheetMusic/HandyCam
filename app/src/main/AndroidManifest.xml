@@ -29,7 +29,6 @@
             android:theme="@style/Theme.HandyCam">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
@@ -41,10 +40,6 @@
             android:name=".KtorHttpsServerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-        <activity
-            android:name=".CameraControlActivity"
-            android:exported="false"
-            android:screenOrientation="fullSensor" />
     </application>
 
 </manifest>

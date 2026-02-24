@@ -52,6 +52,7 @@ private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
 private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
 
+@dagger.hilt.android.AndroidEntryPoint
 class StreamService : LifecycleService() {
     // keep only the latest frame to minimize latency
     // keep a tiny buffer to reduce tearing when encoder/consumer timing is slightly off
@@ -96,36 +97,47 @@ class StreamService : LifecycleService() {
     @Volatile
     private var previewSurface: Surface? = null
     private var previewUseCase: androidx.camera.core.Preview? = null
-    private lateinit var settingsManager: SettingsManager
 
     // mDNS / NSD for DroidCam OBS plugin discovery
     private var mdnsResponder: MdnsResponder? = null
 
+    @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
+    @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        settingsManager = SettingsManager.getInstance(this)
         // Observe relevant settings to apply runtime changes
-        try {
-            settingsManager.torchEnabled.observe(this) { enabled ->
-                try { applyTorch(enabled) } catch (e: Exception) { Log.e(TAG, "applyTorch observer error", e) }
+        lifecycleScope.launch {
+            streamStateHolder.torchEnabled.collect { enabled ->
+                try { applyTorch(enabled) } catch (e: Exception) { Log.e(TAG, "applyTorch error", e) }
             }
-            settingsManager.exposure.observe(this) { v ->
-                try { applyExposure(v) } catch (e: Exception) { Log.e(TAG, "applyExposure observer error", e) }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.exposure.collect { v ->
+                try { applyExposure(v) } catch (e: Exception) { Log.e(TAG, "applyExposure error", e) }
             }
-            settingsManager.focus.observe(this) { v ->
-                try { applyFocus(v) } catch (e: Exception) { Log.e(TAG, "applyFocus observer error", e) }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.focus.collect { v ->
+                try { applyFocus(v) } catch (e: Exception) { Log.e(TAG, "applyFocus error", e) }
             }
-            settingsManager.autoFocus.observe(this) { af ->
-                try { applyAutoFocus(af) } catch (e: Exception) { Log.e(TAG, "applyAutoFocus observer error", e) }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.autoFocus.collect { af ->
+                try { applyAutoFocus(af) } catch (e: Exception) { Log.e(TAG, "applyAutoFocus error", e) }
             }
-            settingsManager.zoom.observe(this) { v ->
-                try { applyZoom(v) } catch (e: Exception) { Log.e(TAG, "applyZoom observer error", e) }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.zoom.collect { v ->
+                try { applyZoom(v) } catch (e: Exception) { Log.e(TAG, "applyZoom error", e) }
             }
-            settingsManager.whiteBalance.observe(this) { v ->
-                try { applyWhiteBalance(v) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalance observer error", e) }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.whiteBalance.collect { v ->
+                try { applyWhiteBalance(v) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalance error", e) }
             }
-        } catch (_: Exception) {}
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -143,16 +155,16 @@ class StreamService : LifecycleService() {
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
 
-                // Update settings manager
-                settingsManager.setStreaming(true)
-                settingsManager.setCamera(selectedCamera)
-                settingsManager.setPort(port)
-                settingsManager.setWidth(width)
-                settingsManager.setHeight(height)
-                settingsManager.setJpegQuality(jpegQuality)
-                settingsManager.setFps(targetFps)
-                settingsManager.setUseAvc(useAvc)
-                settingsManager.setHost(host)
+                // Update state holder
+                streamStateHolder.setStreaming(true)
+                streamStateHolder.setCamera(selectedCamera)
+                streamStateHolder.setPort(port)
+                streamStateHolder.setWidth(width)
+                streamStateHolder.setHeight(height)
+                streamStateHolder.setJpegQuality(jpegQuality)
+                streamStateHolder.setFps(targetFps)
+                streamStateHolder.setUseAvc(useAvc)
+                streamStateHolder.setHost(host)
 
                 // Save streaming state to preferences
                 getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
@@ -182,7 +194,7 @@ class StreamService : LifecycleService() {
                 val newCam = intent.getStringExtra("camera") ?: ""
                 if (newCam.isNotBlank()) {
                     Log.i(TAG, "Received camera switch request -> $newCam")
-                    settingsManager.setCamera(newCam)
+                    streamStateHolder.setCamera(newCam)
                     // perform camera switch while streaming
                     try {
                         handleCameraSwitchRequest(newCam)
@@ -197,7 +209,7 @@ class StreamService : LifecycleService() {
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
             ACTION_STOP -> {
-                settingsManager.setStreaming(false)
+                streamStateHolder.setStreaming(false)
                 unregisterMdns()
                 stopStreaming()
                 stopForeground(true)
@@ -270,18 +282,14 @@ class StreamService : LifecycleService() {
         builder.build()
     }
     private fun notifyStreamingState(isStreaming: Boolean) {
-        val intent = Intent("com.example.handycam.STREAM_STATE").apply {
-                setPackage(packageName)
-            putExtra("isStreaming", isStreaming)
-        }
-        sendBroadcast(intent)
+        streamStateHolder.setStreaming(isStreaming)
     }
 
     // Apply torch state to camera (CameraX or Camera2)
     private fun applyTorch(enabled: Boolean) {
         try {
             if (!useAvc) {
-                SharedSurfaceProvider.cameraControl?.enableTorch(enabled)
+                cameraStateHolder.cameraControl?.enableTorch(enabled)
                 Log.i(TAG, "Applied torch via CameraControl: $enabled")
             } else {
                 // For Camera2 path, update repeating request to set FLASH_MODE
@@ -292,7 +300,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         if (enabled) {
                             try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH) } catch (_: Exception) {}
@@ -315,8 +323,8 @@ class StreamService : LifecycleService() {
     private fun applyExposure(value: Int) {
         try {
             if (!useAvc) {
-                val cc = SharedSurfaceProvider.cameraControl
-                val info = SharedSurfaceProvider.cameraInfo
+                val cc = cameraStateHolder.cameraControl
+                val info = cameraStateHolder.cameraInfo
                 try {
                     // clamp to camera's exposure range if available
                     val range = info?.exposureState?.exposureCompensationRange
@@ -334,7 +342,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         try { builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, value) } catch (_: Exception) {}
                         session.setRepeatingRequest(builder.build(), null, cameraHandler)
@@ -363,7 +371,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         // Map 0..100 slider to a focus distance value (inverse meters). 0 -> infinity (0.0f), 100 -> 1.0f
                         val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
                         try { builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
@@ -394,7 +402,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         if (enabled) builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) else builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                         session.setRepeatingRequest(builder.build(), null, cameraHandler)
                     } catch (e: Exception) {
@@ -410,7 +418,7 @@ class StreamService : LifecycleService() {
     private fun applyZoom(linearZoom: Float) {
         try {
             if (!useAvc) {
-                SharedSurfaceProvider.cameraControl?.setLinearZoom(linearZoom)
+                cameraStateHolder.cameraControl?.setLinearZoom(linearZoom)
                 Log.i(TAG, "Applied zoom via CameraControl: $linearZoom")
             } else {
                 cameraHandler?.post {
@@ -430,7 +438,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
                         session.setRepeatingRequest(builder.build(), null, cameraHandler)
                         Log.i(TAG, "Applied zoom via Camera2: ratio=$zoomRatio")
@@ -456,7 +464,7 @@ class StreamService : LifecycleService() {
                         val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         encoderInputSurface?.let { builder.addTarget(it) }
                         imageReader?.surface?.let { builder.addTarget(it) }
-                        SharedSurfaceProvider.previewSurface?.let { builder.addTarget(it) }
+                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
                         builder.set(CaptureRequest.CONTROL_AWB_MODE, mode)
                         session.setRepeatingRequest(builder.build(), null, cameraHandler)
                         Log.i(TAG, "Applied WB via Camera2: mode=$mode")
@@ -560,9 +568,9 @@ class StreamService : LifecycleService() {
                 this@StreamService.analysisUseCase = analysisUseCase
                 
                 // Create preview use case if surface provider is available
-                if (SharedSurfaceProvider.previewSurfaceProvider != null) {
+                if (cameraStateHolder.previewSurfaceProvider != null) {
                     previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
-                        setSurfaceProvider(SharedSurfaceProvider.previewSurfaceProvider)
+                        setSurfaceProvider(cameraStateHolder.previewSurfaceProvider)
                     }
                 }
 
@@ -587,8 +595,8 @@ class StreamService : LifecycleService() {
                     val camera = cameraProvider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
                     
                     // Store camera control for preview activity
-                    SharedSurfaceProvider.cameraControl = camera.cameraControl
-                    SharedSurfaceProvider.cameraInfo = camera.cameraInfo
+                    cameraStateHolder.cameraControl = camera.cameraControl
+                    cameraStateHolder.cameraInfo = camera.cameraInfo
                     
                     Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     
@@ -657,10 +665,10 @@ class StreamService : LifecycleService() {
         cameraExecutor = null
         
         // Clear shared surface references
-        SharedSurfaceProvider.previewSurface = null
-        SharedSurfaceProvider.previewSurfaceProvider = null
-        SharedSurfaceProvider.cameraControl = null
-        SharedSurfaceProvider.cameraInfo = null
+        cameraStateHolder.previewSurface = null
+        cameraStateHolder.previewSurfaceProvider = null
+        cameraStateHolder.cameraControl = null
+        cameraStateHolder.cameraInfo = null
 
         try {
             // stop and release encoder after camera surfaces are torn down
@@ -1097,7 +1105,7 @@ class StreamService : LifecycleService() {
 
                         builder.addTarget(surface)
                         val targets = mutableListOf(surface, ir.surface)
-                        SharedSurfaceProvider.previewSurface?.let { targets.add(it) }
+                        cameraStateHolder.previewSurface?.let { targets.add(it) }
                         
                         camera.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
@@ -1327,7 +1335,7 @@ class StreamService : LifecycleService() {
         if (surfaceToken == null) {
             // Remove preview
             previewUseCase = null
-            SharedSurfaceProvider.previewSurfaceProvider = null
+            cameraStateHolder.previewSurfaceProvider = null
             Log.i(TAG, "Preview surface removed")
             
             // For both modes, stop the preview use case
@@ -1350,7 +1358,7 @@ class StreamService : LifecycleService() {
             // This works alongside Camera2 encoder for AVC mode
             lifecycleScope.launch(Dispatchers.Main) {
                 try {
-                    val provider = SharedSurfaceProvider.previewSurfaceProvider
+                    val provider = cameraStateHolder.previewSurfaceProvider
                     if (provider != null) {
                         previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
                             setSurfaceProvider(provider)
@@ -1387,8 +1395,8 @@ class StreamService : LifecycleService() {
             val camera = provider.bindToLifecycle(this@StreamService, selector, preview)
             
             // Store camera control for preview activity
-            SharedSurfaceProvider.cameraControl = camera.cameraControl
-            SharedSurfaceProvider.cameraInfo = camera.cameraInfo
+            cameraStateHolder.cameraControl = camera.cameraControl
+            cameraStateHolder.cameraInfo = camera.cameraInfo
             
             Log.i(TAG, "Bound CameraX preview for Camera2/AVC mode")
         } catch (e: Exception) {
@@ -1406,7 +1414,7 @@ class StreamService : LifecycleService() {
             val surfaces = mutableListOf<Surface>()
             encoderInputSurface?.let { surfaces.add(it) }
             imageReader?.surface?.let { surfaces.add(it) }
-            SharedSurfaceProvider.previewSurface?.let { surfaces.add(it) }
+            cameraStateHolder.previewSurface?.let { surfaces.add(it) }
             
             if (surfaces.isEmpty()) {
                 Log.w(TAG, "No surfaces for Camera2 reconfigure")
@@ -1457,19 +1465,4 @@ class StreamService : LifecycleService() {
             Log.e(TAG, "Failed to rebind CameraX", e)
         }
     }
-}
-
-// Shared surface provider for communication between service and activity
-object SharedSurfaceProvider {
-    @Volatile
-    var previewSurface: Surface? = null
-    
-    @Volatile
-    var previewSurfaceProvider: androidx.camera.core.Preview.SurfaceProvider? = null
-    
-    @Volatile
-    var cameraControl: androidx.camera.core.CameraControl? = null
-    
-    @Volatile
-    var cameraInfo: androidx.camera.core.CameraInfo? = null
 }
