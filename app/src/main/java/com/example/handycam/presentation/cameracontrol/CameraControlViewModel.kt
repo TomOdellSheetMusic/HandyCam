@@ -28,6 +28,7 @@ class CameraControlViewModel @Inject constructor(
     val exposure: StateFlow<Int> = streamStateHolder.exposure
     val zoom: StateFlow<Float> = streamStateHolder.zoom
     val whiteBalance: StateFlow<Int> = streamStateHolder.whiteBalance
+    val useAvc: StateFlow<Boolean> = streamStateHolder.useAvc
 
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
     val availableCameras: StateFlow<List<CameraInfo>> = _availableCameras.asStateFlow()
@@ -83,6 +84,15 @@ class CameraControlViewModel @Inject constructor(
         context.startService(Intent(context, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
             putExtra("surfaceToken", if (provider != null) "camerax_preview" else null as String?)
+        })
+    }
+
+    /** Used in AVC mode: passes the raw SurfaceView Surface directly to the Camera2 session. */
+    fun setPreviewSurface(surface: android.view.Surface?) {
+        cameraStateHolder.previewSurface = surface
+        context.startService(Intent(context, StreamService::class.java).apply {
+            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            putExtra("surfaceToken", if (surface != null) "camera2_preview" else null as String?)
         })
     }
 

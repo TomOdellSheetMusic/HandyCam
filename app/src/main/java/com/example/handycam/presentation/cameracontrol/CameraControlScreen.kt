@@ -2,6 +2,8 @@ package com.example.handycam.presentation.cameracontrol
 
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.view.PreviewView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,6 +42,7 @@ fun CameraControlScreen(
     val exposure by viewModel.exposure.collectAsState()
     val zoom by viewModel.zoom.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
+    val useAvc by viewModel.useAvc.collectAsState()
 
     var showEvLabel by remember { mutableStateOf(false) }
     var focusRingVisible by remember { mutableStateOf(false) }
@@ -61,19 +64,50 @@ fun CameraControlScreen(
     // Go back when stream stops
     LaunchedEffect(isStreaming) { if (!isStreaming) onBack() }
 
+    // Clean up preview surface on exit
+    DisposableEffect(useAvc) {
+        onDispose {
+            if (useAvc) viewModel.setPreviewSurface(null)
+            else viewModel.setPreviewSurfaceProvider(null)
+        }
+    }
+
     val density = LocalDensity.current
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ── Camera preview ────────────────────────────────────────────
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).also { pv ->
-                    previewViewRef = pv
-                    viewModel.setPreviewSurfaceProvider(pv.surfaceProvider)
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+        if (useAvc) {
+            // AVC: Camera2 owns the camera — use a SurfaceView whose Surface is
+            // added directly to the Camera2 capture session (no CameraX conflict).
+            AndroidView(
+                factory = { ctx ->
+                    SurfaceView(ctx).also { sv ->
+                        sv.holder.addCallback(object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: SurfaceHolder) {
+                                viewModel.setPreviewSurface(holder.surface)
+                            }
+                            override fun surfaceChanged(holder: SurfaceHolder, f: Int, w: Int, h: Int) {
+                                viewModel.setPreviewSurface(holder.surface)
+                            }
+                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                viewModel.setPreviewSurface(null)
+                            }
+                        })
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).also { pv ->
+                        previewViewRef = pv
+                        viewModel.setPreviewSurfaceProvider(pv.surfaceProvider)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // ── Gesture layer (tap-to-focus, drag-to-EV, pinch-to-zoom) ──
         Box(

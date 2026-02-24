@@ -100,6 +100,10 @@ class StreamService : LifecycleService() {
     private var imageReader: android.media.ImageReader? = null
     private var encoderWidth: Int = 0
     private var encoderHeight: Int = 0
+    // The exact surfaces the current Camera2 session was configured with.
+    // Must be used as-is when rebuilding CaptureRequests — Camera2 throws if
+    // the set of targets doesn't match the session configuration.
+    private var sessionSurfaces: List<Surface> = emptyList()
     // CameraX fields for MJPEG path so we can rebind while running
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysisUseCase: ImageAnalysis? = null
@@ -348,6 +352,67 @@ class StreamService : LifecycleService() {
         streamStateHolder.setStreaming(isStreaming)
     }
 
+    /**
+     * Builds a Camera2 TEMPLATE_RECORD request targeting exactly [sessionSurfaces]
+     * and re-applies all current control state from [streamStateHolder].
+     * Must be called on the [cameraHandler] thread.
+     */
+    private fun buildCamera2Request(cam: CameraDevice): CaptureRequest? {
+        if (sessionSurfaces.isEmpty()) return null
+        return try {
+            val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+            sessionSurfaces.forEach { b.addTarget(it) }
+            b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            // Flash / torch
+            val flashMode = if (streamStateHolder.torchEnabled.value)
+                CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+            try { b.set(CaptureRequest.FLASH_MODE, flashMode) } catch (_: Exception) {}
+            // Exposure compensation
+            val ev = streamStateHolder.exposure.value
+            try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
+            // Zoom
+            val zoom = streamStateHolder.zoom.value
+            if (zoom > 0f) {
+                try {
+                    val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
+                    val maxZoom = chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+                    val zoomRatio = 1f + zoom * (maxZoom - 1f)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
+                    } else {
+                        val sensor = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                        if (sensor != null) {
+                            val cx = sensor.width() / 2; val cy = sensor.height() / 2
+                            val hw = (sensor.width() / (2f * zoomRatio)).toInt()
+                            val hh = (sensor.height() / (2f * zoomRatio)).toInt()
+                            b.set(CaptureRequest.SCALER_CROP_REGION,
+                                android.graphics.Rect(cx - hw, cy - hh, cx + hw, cy + hh))
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            b.build()
+        } catch (e: Exception) {
+            Log.e(TAG, "buildCamera2Request failed", e)
+            null
+        }
+    }
+
+    /** Posts a Camera2 repeating request update on the camera handler thread. */
+    private fun updateCamera2Request() {
+        cameraHandler?.post {
+            val cam = cameraDevice ?: return@post
+            val session = captureSession ?: return@post
+            val req = buildCamera2Request(cam) ?: return@post
+            try {
+                session.setRepeatingRequest(req, null, cameraHandler)
+            } catch (e: Exception) {
+                Log.e(TAG, "setRepeatingRequest failed", e)
+            }
+        }
+    }
+
     // Apply torch state to camera (CameraX or Camera2)
     private fun applyTorch(enabled: Boolean) {
         try {
@@ -355,27 +420,7 @@ class StreamService : LifecycleService() {
                 cameraStateHolder.cameraControl?.enableTorch(enabled)
                 Log.i(TAG, "Applied torch via CameraControl: $enabled")
             } else {
-                // For Camera2 path, update repeating request to set FLASH_MODE
-                cameraHandler?.post {
-                    try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                        if (enabled) {
-                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH) } catch (_: Exception) {}
-                        } else {
-                            try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF) } catch (_: Exception) {}
-                        }
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        Log.i(TAG, "Applied torch via Camera2: $enabled")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to apply torch on Camera2", e)
-                    }
-                }
+                updateCamera2Request()
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyTorch error", e)
@@ -389,7 +434,6 @@ class StreamService : LifecycleService() {
                 val cc = cameraStateHolder.cameraControl
                 val info = cameraStateHolder.cameraInfo
                 try {
-                    // clamp to camera's exposure range if available
                     val range = info?.exposureState?.exposureCompensationRange
                     val v = if (range != null) value.coerceIn(range.lower, range.upper) else value
                     cc?.setExposureCompensationIndex(v)
@@ -398,22 +442,7 @@ class StreamService : LifecycleService() {
                     Log.w(TAG, "CameraControl exposure apply failed", e)
                 }
             } else {
-                cameraHandler?.post {
-                    try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                        try { builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, value) } catch (_: Exception) {}
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        Log.i(TAG, "Applied exposure via Camera2: $value")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to apply exposure on Camera2", e)
-                    }
-                }
+                updateCamera2Request()
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyExposure error", e)
@@ -424,22 +453,22 @@ class StreamService : LifecycleService() {
     private fun applyFocus(value: Int) {
         try {
             if (!useAvc) {
-                // Manual focus not directly supported in CameraX generic API; no-op
                 Log.i(TAG, "Manual focus requested ($value) but CameraX manual focus not supported; ignoring")
             } else {
+                // Focus distance is applied separately since it changes AF mode
                 cameraHandler?.post {
+                    val cam = cameraDevice ?: return@post
+                    val session = captureSession ?: return@post
+                    val req = buildCamera2Request(cam) ?: return@post
+                    // Re-build with manual focus override — use a fresh builder from the same surfaces
                     try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        // Map 0..100 slider to a focus distance value (inverse meters). 0 -> infinity (0.0f), 100 -> 1.0f
+                        val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        sessionSurfaces.forEach { b.addTarget(it) }
+                        b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
-                        try { builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
-                        try { builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd) } catch (_: Exception) {}
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                        b.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd)
+                        session.setRepeatingRequest(b.build(), null, cameraHandler)
                         Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to apply focus on Camera2", e)
@@ -454,24 +483,9 @@ class StreamService : LifecycleService() {
     private fun applyAutoFocus(enabled: Boolean) {
         try {
             if (!useAvc) {
-                // CameraX: toggling AF mode programmatically requires a PreviewView to build a MeteringPoint.
-                // We'll no-op here and rely on Camera2 path for manual AF control.
                 Log.i(TAG, "AutoFocus change requested for CameraX: $enabled (no-op)")
             } else {
-                cameraHandler?.post {
-                    try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        if (enabled) builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) else builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to apply AF mode on Camera2", e)
-                    }
-                }
+                updateCamera2Request()
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyAutoFocus error", e)
@@ -484,31 +498,7 @@ class StreamService : LifecycleService() {
                 cameraStateHolder.cameraControl?.setLinearZoom(linearZoom)
                 Log.i(TAG, "Applied zoom via CameraControl: $linearZoom")
             } else {
-                cameraHandler?.post {
-                    try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val camId = findCameraId(selectedCamera) ?: return@post
-                        val chars = cameraManager?.getCameraCharacteristics(camId) ?: return@post
-                        val sensorSize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
-                        val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-                        val zoomRatio = 1f + (maxZoom - 1f) * linearZoom
-                        val cropW = (sensorSize.width() / zoomRatio).toInt()
-                        val cropH = (sensorSize.height() / zoomRatio).toInt()
-                        val cropX = (sensorSize.width() - cropW) / 2
-                        val cropY = (sensorSize.height() - cropH) / 2
-                        val cropRegion = android.graphics.Rect(cropX, cropY, cropX + cropW, cropY + cropH)
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        Log.i(TAG, "Applied zoom via Camera2: ratio=$zoomRatio")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to apply zoom on Camera2", e)
-                    }
-                }
+                updateCamera2Request()
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyZoom error", e)
@@ -520,21 +510,7 @@ class StreamService : LifecycleService() {
             if (!useAvc) {
                 Log.i(TAG, "WB change requested for CameraX path (no-op without Camera2Interop)")
             } else {
-                cameraHandler?.post {
-                    try {
-                        val cam = cameraDevice ?: return@post
-                        val session = captureSession ?: return@post
-                        val builder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        encoderInputSurface?.let { builder.addTarget(it) }
-                        imageReader?.surface?.let { builder.addTarget(it) }
-                        cameraStateHolder.previewSurface?.let { builder.addTarget(it) }
-                        builder.set(CaptureRequest.CONTROL_AWB_MODE, mode)
-                        session.setRepeatingRequest(builder.build(), null, cameraHandler)
-                        Log.i(TAG, "Applied WB via Camera2: mode=$mode")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to apply WB on Camera2", e)
-                    }
-                }
+                updateCamera2Request()
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyWhiteBalance error", e)
@@ -1508,8 +1484,8 @@ class StreamService : LifecycleService() {
                         val sessionCb = object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
                                 captureSession = session
+                                sessionSurfaces = targets.toList() // snapshot for safe request rebuilding
                                 try {
-                                    // Add all surfaces to the capture request
                                     val reqBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                                     targets.forEach { reqBuilder.addTarget(it) }
                                     reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
@@ -1563,6 +1539,7 @@ class StreamService : LifecycleService() {
     private fun stopCamera2(releaseEncoderSurface: Boolean = true) {
         try { captureSession?.close() } catch (_: Exception) {}
         captureSession = null
+        sessionSurfaces = emptyList()
         try { cameraDevice?.close() } catch (_: Exception) {}
         cameraDevice = null
         if (releaseEncoderSurface) {
@@ -1738,17 +1715,17 @@ class StreamService : LifecycleService() {
     
     private fun handlePreviewSurfaceUpdate(surfaceToken: String?) {
         if (surfaceToken == null) {
-            // Remove preview
             previewUseCase = null
             cameraStateHolder.previewSurfaceProvider = null
             Log.i(TAG, "Preview surface removed")
             
-            // For both modes, stop the preview use case
             lifecycleScope.launch(Dispatchers.Main) {
                 try {
-                    cameraProvider?.unbindAll()
-                    // Rebind without preview for MJPEG mode
-                    if (!useAvc) {
+                    if (useAvc) {
+                        // AVC: reconfigure Camera2 session without the preview surface
+                        cameraHandler?.post { reconfigureCamera2Session() }
+                    } else {
+                        cameraProvider?.unbindAll()
                         rebindCameraXUseCases()
                     }
                 } catch (e: Exception) {
@@ -1756,26 +1733,20 @@ class StreamService : LifecycleService() {
                 }
             }
         } else {
-            // Surface is being set by the preview activity via SharedSurfaceProvider
             Log.i(TAG, "Preview surface registered: $surfaceToken")
             
-            // For both modes, use CameraX Preview for the preview UI
-            // This works alongside Camera2 encoder for AVC mode
             lifecycleScope.launch(Dispatchers.Main) {
                 try {
-                    val provider = cameraStateHolder.previewSurfaceProvider
-                    if (provider != null) {
-                        previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
-                            setSurfaceProvider(provider)
-                        }
-                        
-                        // Only rebind for MJPEG mode (CameraX controls camera)
-                        // For AVC mode (Camera2 controls camera), just create the preview use case
-                        if (!useAvc) {
+                    if (useAvc && surfaceToken == "camera2_preview") {
+                        // AVC: add the raw SurfaceView Surface to the Camera2 session
+                        cameraHandler?.post { reconfigureCamera2Session() }
+                    } else if (!useAvc) {
+                        val provider = cameraStateHolder.previewSurfaceProvider
+                        if (provider != null) {
+                            previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
+                                setSurfaceProvider(provider)
+                            }
                             rebindCameraXUseCases()
-                        } else {
-                            // For AVC mode, bind preview to a separate CameraX session for preview only
-                            bindPreviewOnly()
                         }
                     }
                 } catch (e: Exception) {
@@ -1829,6 +1800,7 @@ class StreamService : LifecycleService() {
             val sessionCb2 = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(newSession: CameraCaptureSession) {
                     captureSession = newSession
+                    sessionSurfaces = surfaces.toList()
                     try {
                         val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                         surfaces.forEach { builder.addTarget(it) }
