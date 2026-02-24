@@ -702,13 +702,14 @@ class StreamService : LifecycleService() {
         // Start server thread
         serverThread = Thread {
             try {
-                // create socket unbound so we can set reuseAddress before bind
+                // Always bind to all interfaces (0.0.0.0) so both Wi-Fi and USB (adb reverse)
+                // connections are accepted. bindHost is kept for logging only.
                 val server = ServerSocket()
                 server.reuseAddress = true
                 try {
-                    server.bind(InetSocketAddress(bindHost, port))
+                    server.bind(InetSocketAddress("0.0.0.0", port))
                 } catch (be: BindException) {
-                    Log.e(TAG, "Bind failed on $bindHost:$port - address already in use", be)
+                    Log.e(TAG, "Bind failed on 0.0.0.0:$port - address already in use", be)
                     server.close()
                     serverSocket = null
                     running = false
@@ -716,7 +717,7 @@ class StreamService : LifecycleService() {
                 }
 
                 serverSocket = server
-                Log.i(TAG, "Server listening on $bindHost:$port")
+                Log.i(TAG, "Server listening on 0.0.0.0:$port (Wi-Fi IP: $bindHost)")
 
                 while (running) {
                     val client = try { server.accept() } catch (ie: Exception) {

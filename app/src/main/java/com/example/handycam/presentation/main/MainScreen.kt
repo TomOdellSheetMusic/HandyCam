@@ -31,7 +31,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
 
-private val FPS_OPTIONS = listOf("15", "24", "30", "50", "60")
+private val FPS_OPTIONS = listOf("15", "30", "60")
 
 private val SCREEN_SOURCE = com.example.handycam.data.model.CameraInfo(
     id = "screen", displayName = "Screen Share", facing = "screen"
@@ -153,24 +153,22 @@ fun MainScreen(
             // ── Connection ────────────────────────────────────────────
             SectionCard(title = "Connection") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = { host = it },
-                        label = { Text("IP Address") },
-                        supportingText = { Text("Your phone's Wi-Fi IP") },
-                        modifier = Modifier.weight(2f),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        enabled = !isStreaming,
-                        trailingIcon = {
-                            IconButton(
-                                onClick = { host = viewModel.localIp },
-                                enabled = !isStreaming
-                            ) {
-                                Icon(Icons.Filled.Refresh, contentDescription = "Refresh IP", modifier = Modifier.size(18.dp))
+                    Column(modifier = Modifier.weight(2f)) {
+                        Text("IP Address", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(host, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            val clipboard = LocalClipboardManager.current
+                            IconButton(onClick = { clipboard.setText(AnnotatedString(host)) },
+                                modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = "Copy IP",
+                                    modifier = Modifier.size(16.dp))
                             }
                         }
-                    )
+                        Text("Your phone's Wi-Fi IP", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     OutlinedTextField(
                         value = port,
                         onValueChange = { port = it },
