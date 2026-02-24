@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.*
@@ -18,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -318,12 +321,30 @@ fun MainScreen(
                     }
                 }
                 if (httpsRunning) {
+                    val serverUrl = "https://$host:$httpsPort/camera"
+                    val clipboard = LocalClipboardManager.current
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        "https://$host:$httpsPort/camera",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            serverUrl,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { clipboard.setText(AnnotatedString(serverUrl)) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                contentDescription = "Copy URL",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 }
             }
 
