@@ -74,9 +74,11 @@ fun MainScreen(
     var httpsPort by remember { mutableStateOf("8443") }
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
-
-    // Sources shown in the dropdown: real cameras + Screen Share
-    val allSources = remember(cameras) { cameras + SCREEN_SOURCE }
+    var isScreenSource by remember { mutableStateOf(false) }
+    // Sync the toggle back to camera when streaming stops
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming) isScreenSource = false
+    }
 
     // Capture resolved (w, h) once so the screen capture launcher can also use it
     val resolvedWidth by remember { derivedStateOf {
@@ -233,27 +235,47 @@ fun MainScreen(
 
                 Spacer(Modifier.height(4.dp))
 
-                // Source (camera or screen)
-                ExposedDropdownMenuBox(
-                    expanded = cameraDropdownOpen,
-                    onExpandedChange = { if (!isStreaming) cameraDropdownOpen = it },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    OutlinedTextField(
-                        value = selectedCamera?.displayName ?: "Select source",
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Source") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cameraDropdownOpen) },
-                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
-                        enabled = !isStreaming
+                // Source type: Camera or Screen
+                Text("Source", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                        selected = !isScreenSource,
+                        onClick = { if (!isStreaming) { isScreenSource = false; selectedCamera = cameras.firstOrNull() } },
+                        label = { Text("Camera") }
                     )
-                    ExposedDropdownMenu(expanded = cameraDropdownOpen, onDismissRequest = { cameraDropdownOpen = false }) {
-                        allSources.forEach { source ->
-                            DropdownMenuItem(
-                                text = { Text(source.displayName) },
-                                onClick = { selectedCamera = source; cameraDropdownOpen = false }
-                            )
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                        selected = isScreenSource,
+                        onClick = { if (!isStreaming) { isScreenSource = true; selectedCamera = SCREEN_SOURCE } },
+                        label = { Text("Screen") }
+                    )
+                }
+
+                // Camera picker — only shown in camera mode
+                AnimatedVisibility(visible = !isScreenSource) {
+                    ExposedDropdownMenuBox(
+                        expanded = cameraDropdownOpen,
+                        onExpandedChange = { if (!isStreaming) cameraDropdownOpen = it },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = selectedCamera?.displayName ?: "Select camera",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Camera") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cameraDropdownOpen) },
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
+                            enabled = !isStreaming
+                        )
+                        ExposedDropdownMenu(expanded = cameraDropdownOpen, onDismissRequest = { cameraDropdownOpen = false }) {
+                            cameras.forEach { cam ->
+                                DropdownMenuItem(
+                                    text = { Text(cam.displayName) },
+                                    onClick = { selectedCamera = cam; cameraDropdownOpen = false }
+                                )
+                            }
                         }
                     }
                 }
@@ -303,7 +325,6 @@ fun MainScreen(
             }
 
             // ── Start / Stop ──────────────────────────────────────────
-            val isScreenSource = selectedCamera?.id == "screen"
             Button(
                 onClick = {
                     if (isStreaming) viewModel.stopStreaming()
