@@ -54,6 +54,8 @@ import android.media.projection.MediaProjection
 import android.media.AudioRecord
 import android.media.AudioFormat
 import android.media.MediaRecorder
+import android.media.AudioAttributes
+import android.media.AudioPlaybackCaptureConfiguration
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
@@ -1204,22 +1206,44 @@ class StreamService : LifecycleService() {
     private fun startAudio() {
         if (audioRunning) return
         try {
+            val deviceAudio = useScreenCapture && mediaProjection != null
+            val channelConfig = if (deviceAudio) AudioFormat.CHANNEL_IN_STEREO else AudioFormat.CHANNEL_IN_MONO
+            val channelCount = if (deviceAudio) 2 else AUDIO_CHANNELS
             val minBuf = AudioRecord.getMinBufferSize(
                 AUDIO_SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
+                channelConfig,
                 AudioFormat.ENCODING_PCM_16BIT
             )
             val bufSize = maxOf(minBuf, 4096)
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                AUDIO_SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufSize
-            )
+            audioRecord = if (deviceAudio) {
+                val config = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .build()
+                AudioRecord.Builder()
+                    .setAudioPlaybackCaptureConfig(config)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(AUDIO_SAMPLE_RATE)
+                            .setChannelMask(channelConfig)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufSize)
+                    .build()
+            } else {
+                AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    AUDIO_SAMPLE_RATE,
+                    channelConfig,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize
+                )
+            }
 
             val format = MediaFormat.createAudioFormat(
-                MediaFormat.MIMETYPE_AUDIO_AAC, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS
+                MediaFormat.MIMETYPE_AUDIO_AAC, AUDIO_SAMPLE_RATE, channelCount
             ).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                 setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
@@ -1231,7 +1255,8 @@ class StreamService : LifecycleService() {
 
             audioRunning = true
             audioRecord!!.startRecording()
-            Log.i(TAG, "Audio capture started: ${AUDIO_SAMPLE_RATE}Hz mono ${AUDIO_BITRATE}bps AAC-LC")
+            val audioDesc = if (deviceAudio) "device audio (stereo)" else "mic (mono)"
+            Log.i(TAG, "Audio capture started: ${AUDIO_SAMPLE_RATE}Hz $audioDesc ${AUDIO_BITRATE}bps AAC-LC")
 
             val encoder = audioEncoder!!
             val record = audioRecord!!
