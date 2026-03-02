@@ -5,7 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.widget.*
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -14,35 +16,20 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.handycam.CameraControlActivity
-import com.example.handycam.R
 import com.example.handycam.SettingsPagerAdapter
+import com.example.handycam.data.model.CameraInfo
+import com.example.handycam.databinding.ActivityMainBinding
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
-/**
- * Refactored MainActivity using MVVM architecture.
- * All business logic moved to MainViewModel.
- * Uses DataStore for preferences (replaced SharedPreferences).
- */
 @AndroidEntryPoint
-class MainActivity : AppCompatActivity() {
+class MainActivityNew : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
-
-    // UI components
-    private lateinit var hostEdit: EditText
-    private lateinit var portEdit: EditText
-    private lateinit var widthEdit: EditText
-    private lateinit var heightEdit: EditText
-    private lateinit var cameraEdit: EditText
-    private lateinit var cameraListLayout: LinearLayout
-    private lateinit var fpsSpinner: Spinner
-    private lateinit var startButton: Button
-    private lateinit var previewButton: Button
-    private lateinit var settingsPager: androidx.viewpager2.widget.ViewPager2
-    private lateinit var settingsTabs: com.google.android.material.tabs.TabLayout
+    private lateinit var binding: ActivityMainBinding
 
     private var pendingStartBundle: Bundle? = null
+    private val cameraList = mutableListOf<CameraInfo>()
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -64,7 +51,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        setSupportActionBar(binding.toolbar)
 
         initializeViews()
         setupObservers()
@@ -73,28 +63,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeViews() {
-        hostEdit = findViewById(R.id.hostEdit)
-        portEdit = findViewById(R.id.portEdit)
-        widthEdit = findViewById(R.id.widthEdit)
-        heightEdit = findViewById(R.id.heightEdit)
-        cameraEdit = findViewById(R.id.cameraEdit)
-        cameraListLayout = findViewById(R.id.cameraListLayout)
-        fpsSpinner = findViewById(R.id.fpsSpinner)
-        startButton = findViewById(R.id.startButton)
-        previewButton = findViewById(R.id.previewButton)
-        settingsPager = findViewById(R.id.settingsPager)
-        settingsTabs = findViewById(R.id.settingsTabLayout)
-
         // Setup FPS spinner
         val fpsChoices = listOf("15", "24", "30", "50", "60")
         val fpsAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, fpsChoices).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
-        fpsSpinner.adapter = fpsAdapter
+        binding.fpsSpinner.adapter = fpsAdapter
 
         // Setup settings pager
-        settingsPager.adapter = SettingsPagerAdapter(this)
-        com.google.android.material.tabs.TabLayoutMediator(settingsTabs, settingsPager) { tab, position ->
+        binding.settingsPager.adapter = SettingsPagerAdapter(this)
+        com.google.android.material.tabs.TabLayoutMediator(binding.settingsTabLayout, binding.settingsPager) { tab, position ->
             tab.text = if (position == 0) "MJPEG" else "AVC"
         }.attach()
     }
@@ -102,56 +80,56 @@ class MainActivity : AppCompatActivity() {
     private fun setupObservers() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // Observe app settings
                 launch {
                     viewModel.appSettings.collect { settings ->
-                        hostEdit.setText(settings.host)
-                        portEdit.setText(settings.port.toString())
+                        binding.hostEdit.setText(settings.host)
+                        binding.portEdit.setText(settings.port.toString())
                         updateStreamingButton(settings.isStreaming)
                     }
                 }
 
-                // Observe stream config
                 launch {
                     viewModel.streamConfig.collect { config ->
-                        widthEdit.setText(config.width.toString())
-                        heightEdit.setText(config.height.toString())
-                        
+                        binding.widthEdit.setText(config.width.toString())
+                        binding.heightEdit.setText(config.height.toString())
+
+                        val cameraLabel = cameraList.find { it.id == config.camera }?.displayName
+                        if (cameraLabel != null) {
+                            binding.cameraDropdown.setText(cameraLabel, false)
+                        }
+
                         val fpsChoices = listOf("15", "24", "30", "50", "60")
                         val fpsIndex = fpsChoices.indexOf(config.fps.toString()).coerceAtLeast(0)
-                        fpsSpinner.setSelection(fpsIndex)
+                        binding.fpsSpinner.setSelection(fpsIndex)
                     }
                 }
 
-                // Observe available cameras
                 launch {
                     viewModel.availableCameras.collect { cameras ->
                         populateCameraList(cameras)
                     }
                 }
 
-                // Observe stream state
                 launch {
                     viewModel.streamState.collect { state ->
                         updateStreamingButton(state.isActive)
                         if (state.error != null) {
-                            Toast.makeText(this@MainActivity, state.error, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivityNew, state.error, Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
 
-                // Observe UI events
                 launch {
                     viewModel.uiEvent.collect { event ->
                         when (event) {
                             is MainViewModel.UiEvent.StreamStarted -> {
-                                Toast.makeText(this@MainActivity, "Stream started", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivityNew, "Stream started", Toast.LENGTH_SHORT).show()
                             }
                             is MainViewModel.UiEvent.StreamStopped -> {
-                                Toast.makeText(this@MainActivity, "Stream stopped", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivityNew, "Stream stopped", Toast.LENGTH_SHORT).show()
                             }
                             is MainViewModel.UiEvent.Error -> {
-                                Toast.makeText(this@MainActivity, event.message, Toast.LENGTH_LONG).show()
+                                Toast.makeText(this@MainActivityNew, event.message, Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -161,7 +139,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
-        startButton.setOnClickListener {
+        binding.startButton.setOnClickListener {
             val isCurrentlyStreaming = viewModel.streamState.value.isActive
             if (isCurrentlyStreaming) {
                 viewModel.stopStreaming()
@@ -170,36 +148,32 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        previewButton.setOnClickListener {
+        binding.previewButton.setOnClickListener {
             startActivity(Intent(this, CameraControlActivity::class.java))
         }
 
-        // Save host when it changes
-        hostEdit.setOnFocusChangeListener { _, hasFocus ->
+        binding.hostEdit.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) {
-                viewModel.updateHost(hostEdit.text.toString())
+                viewModel.updateHost(binding.hostEdit.text.toString())
             }
         }
 
-        // Save port when it changes
-        portEdit.setOnFocusChangeListener { _, hasFocus ->
+        binding.portEdit.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) {
-                portEdit.text.toString().toIntOrNull()?.let { port ->
-                    viewModel.updatePort(port)
+                binding.portEdit.text.toString().toIntOrNull()?.let {
+                    viewModel.updatePort(it)
                 }
             }
         }
 
-        // Save resolution when it changes
-        widthEdit.setOnFocusChangeListener { _, hasFocus ->
+        binding.widthEdit.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) updateResolution()
         }
-        heightEdit.setOnFocusChangeListener { _, hasFocus ->
+        binding.heightEdit.setOnFocusChangeListener { _, hasFocus ->
             if (!hasFocus) updateResolution()
         }
 
-        // Save FPS when it changes
-        fpsSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+        binding.fpsSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
                 val fps = parent?.getItemAtPosition(position).toString().toIntOrNull() ?: 60
                 viewModel.updateFps(fps)
@@ -207,77 +181,48 @@ class MainActivity : AppCompatActivity() {
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
+
+        binding.cameraDropdown.onItemClickListener = AdapterView.OnItemClickListener { parent, _, position, _ ->
+            val selectedLabel = parent.getItemAtPosition(position).toString()
+            cameraList.find { it.displayName == selectedLabel }?.let {
+                viewModel.updateCamera(it.id)
+            }
+        }
     }
 
-    private fun populateCameraList(cameras: List<com.example.handycam.data.model.CameraInfo>) {
-        cameraListLayout.removeAllViews()
+    private fun populateCameraList(cameras: List<CameraInfo>) {
+        cameraList.clear()
+        cameraList.addAll(cameras)
 
-        // Add logical camera buttons
-        val backBtn = Button(this).apply {
-            text = "back"
-            setOnClickListener {
-                if (viewModel.streamState.value.isActive) {
-                    viewModel.switchCamera("back")
-                } else {
-                    cameraEdit.setText("back")
-                    viewModel.updateHost("back")
-                }
-            }
-        }
-        cameraListLayout.addView(backBtn)
+        val cameraLabels = cameras.map { it.displayName }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, cameraLabels)
+        binding.cameraDropdown.setAdapter(adapter)
 
-        val frontBtn = Button(this).apply {
-            text = "front"
-            setOnClickListener {
-                if (viewModel.streamState.value.isActive) {
-                    viewModel.switchCamera("front")
-                } else {
-                    cameraEdit.setText("front")
-                    viewModel.updateHost("front")
-                }
-            }
-        }
-        cameraListLayout.addView(frontBtn)
-
-        // Add physical camera buttons
-        cameras.forEach { camera ->
-            val btn = Button(this).apply {
-                text = "${camera.displayName}${camera.focalLength?.let { " $it" } ?: ""}"
-                setOnClickListener {
-                    if (viewModel.streamState.value.isActive) {
-                        viewModel.switchCamera(camera.id)
-                    } else {
-                        cameraEdit.setText(camera.id)
-                        viewModel.updateHost(camera.id)
-                    }
-                }
-            }
-            cameraListLayout.addView(btn)
+        val currentCameraId = viewModel.streamConfig.value.camera
+        val currentCamera = cameras.find { it.id == currentCameraId }
+        if (currentCamera != null) {
+            binding.cameraDropdown.setText(currentCamera.displayName, false)
         }
     }
 
     private fun handleStartStreaming() {
-        val host = hostEdit.text.toString()
-        val port = portEdit.text.toString().toIntOrNull() ?: 4747
-        val width = widthEdit.text.toString().toIntOrNull() ?: 1080
-        val height = heightEdit.text.toString().toIntOrNull() ?: 1920
-        val camera = cameraEdit.text.toString().ifEmpty { "back" }
-        val fps = fpsSpinner.selectedItem.toString().toIntOrNull() ?: 60
+        val host = binding.hostEdit.text.toString()
+        val port = binding.portEdit.text.toString().toIntOrNull() ?: 4747
+        val width = binding.widthEdit.text.toString().toIntOrNull() ?: 1080
+        val height = binding.heightEdit.text.toString().toIntOrNull() ?: 1920
+        val selectedCameraLabel = binding.cameraDropdown.text.toString()
+        val camera = cameraList.find { it.displayName == selectedCameraLabel }?.id ?: "back"
+        val fps = binding.fpsSpinner.selectedItem.toString().toIntOrNull() ?: 60
 
-        // Get settings from fragments
-        val useAvc = settingsPager.currentItem == 1
+        val useAvc = binding.settingsPager.currentItem == 1
         val jpegQuality = if (!useAvc) {
-            (settingsPager.adapter as? SettingsPagerAdapter)?.getMjpegFragment()?.getJpegQuality() ?: 85
-        } else {
-            85
-        }
+            (binding.settingsPager.adapter as? SettingsPagerAdapter)?.getMjpegFragment()?.getJpegQuality() ?: 85
+        } else 85
         val avcBitrate = if (useAvc) {
-            (settingsPager.adapter as? SettingsPagerAdapter)?.getAvcFragment()?.getBitrateMbps()?.let { 
+            (binding.settingsPager.adapter as? SettingsPagerAdapter)?.getAvcFragment()?.getBitrateMbps()?.let {
                 (it * 1_000_000).toInt()
             }
-        } else {
-            null
-        }
+        } else null
 
         pendingStartBundle = Bundle().apply {
             putString("host", host)
@@ -295,13 +240,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestPermissionsAndStart() {
-        // Check camera permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             return
         }
 
-        // Check foreground service permission (Android 14+)
         if (Build.VERSION.SDK_INT >= 34) {
             val fgPerm = "android.permission.FOREGROUND_SERVICE_CAMERA"
             if (ContextCompat.checkSelfPermission(this, fgPerm) != PackageManager.PERMISSION_GRANTED) {
@@ -310,7 +253,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Check notification permission (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -324,7 +266,6 @@ class MainActivity : AppCompatActivity() {
     private fun tryStartPendingIfPermsGranted() {
         val bundle = pendingStartBundle ?: return
 
-        // Check all permissions are granted
         val camGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val fgGranted = if (Build.VERSION.SDK_INT >= 34) {
             ContextCompat.checkSelfPermission(this, "android.permission.FOREGROUND_SERVICE_CAMERA") == PackageManager.PERMISSION_GRANTED
@@ -356,12 +297,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStreamingButton(isStreaming: Boolean) {
-        startButton.text = if (isStreaming) "Stop Server" else "Start Server"
+        binding.startButton.text = if (isStreaming) "Stop Server" else "Start Server"
+        binding.previewButton.visibility = if (isStreaming) android.view.View.VISIBLE else android.view.View.GONE
     }
 
     private fun updateResolution() {
-        val width = widthEdit.text.toString().toIntOrNull() ?: 1080
-        val height = heightEdit.text.toString().toIntOrNull() ?: 1920
+        val width = binding.widthEdit.text.toString().toIntOrNull() ?: 1080
+        val height = binding.heightEdit.text.toString().toIntOrNull() ?: 1920
         viewModel.updateResolution(width, height)
     }
 }

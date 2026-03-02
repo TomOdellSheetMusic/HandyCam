@@ -10,11 +10,14 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.View
-import android.widget.ImageButton
-import android.widget.Spinner
 import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.ImageButton
+import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +36,14 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "CameraControlActivity"
 
+// Camera2 AWB mode constants (mirrors CaptureRequest.CONTROL_AWB_MODE_*)
+private const val AWB_AUTO = 1
+private const val AWB_DAYLIGHT = 2
+private const val AWB_INCANDESCENT = 3
+private const val AWB_FLUORESCENT = 4
+private const val AWB_CLOUDY = 8
+private const val AWB_SHADE = 9
+
 class CameraControlActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
@@ -40,6 +51,8 @@ class CameraControlActivity : AppCompatActivity() {
     private lateinit var cameraSpinner: Spinner
     private lateinit var exposureLabel: TextView
     private lateinit var focusRing: View
+    private lateinit var zoomSeekBar: SeekBar
+    private lateinit var zoomLabel: TextView
     private var cameraManager: android.hardware.camera2.CameraManager? = null
 
     private var cameraControl: androidx.camera.core.CameraControl? = null
@@ -48,11 +61,12 @@ class CameraControlActivity : AppCompatActivity() {
     private var adjustingExposure = false
     private var exposureStartY = 0f
     private var lastExposureIndex = 0
-    
-    private var cameraReadyReceiver: BroadcastReceiver? = null
-    private var useCameraX = false // Track which camera system is being used
+    private var currentLinearZoom = 0f
 
+    private var cameraReadyReceiver: BroadcastReceiver? = null
+    private var useCameraX = false
     private lateinit var settingsManager: SettingsManager
+    private lateinit var scaleGestureDetector: ScaleGestureDetector
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -69,29 +83,11 @@ class CameraControlActivity : AppCompatActivity() {
 
         settingsManager = SettingsManager.getInstance(this)
 
-        // Setup observers for settings manager
         settingsManager.isStreaming.observe(this) { streaming ->
-            if (!streaming) {
-                finish()
-            }
+            if (!streaming) finish()
         }
-
-        settingsManager.torchEnabled.observe(this) { torchEnabled ->
-            // Handle torch changes
-        }
-
-        settingsManager.autoFocus.observe(this) { autoFocus ->
-            // Handle auto focus changes
-        }
-
         settingsManager.exposure.observe(this) { exposure ->
-            runOnUiThread {
-                exposureLabel.text = "Exposure: $exposure"
-            }
-        }
-
-        settingsManager.camera.observe(this) { camera ->
-            // Handle camera switching
+            exposureLabel.text = "EV: $exposure"
         }
 
         previewView = findViewById(R.id.previewView)
@@ -99,150 +95,160 @@ class CameraControlActivity : AppCompatActivity() {
         cameraSpinner = findViewById(R.id.cameraSpinner)
         exposureLabel = findViewById(R.id.exposureLabel)
         focusRing = findViewById(R.id.focusRing)
+        zoomSeekBar = findViewById(R.id.zoomSeekBar)
+        zoomLabel = findViewById(R.id.zoomLabel)
 
         try {
-            cameraManager = getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            cameraManager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
         } catch (_: Exception) {}
-        
-        // Check if streaming service is running to determine camera mode
+
         val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
         val isStreaming = prefs.getBoolean("isStreaming", false)
-        useCameraX = prefs.getBoolean("useAvc", false).not() // CameraX for MJPEG, Camera2 for AVC
-        
+        useCameraX = !prefs.getBoolean("useAvc", false)
+
         if (!isStreaming) {
             Toast.makeText(this, "Please start streaming first", Toast.LENGTH_LONG).show()
             finish()
             return
         }
 
+        setupFlashButton()
+        setupCameraSpinner()
+        setupZoomControls()
+        setupTouchGestures()
+
+        cameraReadyReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                runOnUiThread { updateCameraControls() }
+            }
+        }
+        registerReceiver(cameraReadyReceiver, IntentFilter("com.example.handycam.CAMERA_READY"), Context.RECEIVER_NOT_EXPORTED)
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        } else setupPreview()
+    }
+
+    private fun setupFlashButton() {
         flashBtn.setOnClickListener {
             val ctrl = SharedSurfaceProvider.cameraControl
             val mgr = cameraManager
-            if (ctrl == null) {
-                // Try to toggle via CameraManager as a fallback
-                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-                val prefCam = prefs.getString("camera", null)
-                val camIdFallback = try {
-                    if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition)
-                } catch (_: Exception) { null }
-                if (camIdFallback != null) {
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        try {
-                            val info = SharedSurfaceProvider.cameraInfo
-                            val currentTorch = info?.torchState?.value
-                            val enable = currentTorch != androidx.camera.core.TorchState.ON
-                            try {
-                                mgr?.setTorchMode(camIdFallback, enable)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "CameraManager.setTorchMode failed", e)
-                                Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Torch toggle fallback failed", e)
-                            Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
-                        }
+            lifecycleScope.launch(Dispatchers.Main) {
+                try {
+                    val info = SharedSurfaceProvider.cameraInfo
+                    val enable = info?.torchState?.value != androidx.camera.core.TorchState.ON
+                    if (ctrl != null) {
+                        ctrl.enableTorch(enable)
+                    } else {
+                        val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                        val prefCam = prefs.getString("camera", null)
+                        val camId = try {
+                            if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam
+                            else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition)
+                        } catch (_: Exception) { null }
+                        if (camId != null) mgr?.setTorchMode(camId, enable)
                     }
-                } else {
-                    Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                // toggle torch via CameraX control, with CameraManager fallback
-                lifecycleScope.launch(Dispatchers.Main) {
-                    try {
-                        val info = SharedSurfaceProvider.cameraInfo ?: return@launch
-                        val torchState = info.torchState.value
-                        val enable = torchState != androidx.camera.core.TorchState.ON
-                        try {
-                            ctrl.enableTorch(enable)
-                        } catch (e: Exception) {
-                            // Some implementations return a ListenableFuture; attempt to call anyway
-                            try {
-                                val f = ctrl.javaClass.getMethod("enableTorch", Boolean::class.javaPrimitiveType).invoke(ctrl, enable)
-                            } catch (_: Exception) {}
-                        }
-
-                        // Also attempt CameraManager fallback to ensure hardware torch toggles on some devices
-                        try {
-                            val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-                            val prefCam = prefs.getString("camera", null)
-                            val camIdFallback = try { if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition) } catch (_: Exception) { null }
-                            if (camIdFallback != null) {
-                                try { mgr?.setTorchMode(camIdFallback, enable) } catch (_: Exception) {}
-                            }
-                        } catch (_: Exception) {}
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Torch toggle failed", e)
-                        Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
-                    }
+                    settingsManager.setTorchEnabled(enable)
+                    updateFlashButton(enable)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Torch toggle failed", e)
+                    Toast.makeText(this@CameraControlActivity, "Torch toggle failed", Toast.LENGTH_SHORT).show()
                 }
             }
         }
+    }
 
-        // populate camera list into spinner
+    private fun setupCameraSpinner() {
         try {
-            val mgr = cameraManager
-            if (mgr != null) {
-                val ids = mgr.cameraIdList.toList()
-                val labels = mutableListOf<String>()
-                for (id in ids) {
-                    try {
-                        val chars = mgr.getCameraCharacteristics(id)
-                        val facing = when (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
-                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "front"
-                            android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "back"
-                            else -> "unknown"
-                        }
-                        labels.add("$id ($facing)")
-                    } catch (_: Exception) {
-                        labels.add(id)
+            val mgr = cameraManager ?: return
+            val ids = mgr.cameraIdList.toList()
+            val labels = ids.map { id ->
+                try {
+                    val chars = mgr.getCameraCharacteristics(id)
+                    val facing = when (chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)) {
+                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                        android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK -> "back"
+                        else -> "unknown"
                     }
-                }
-                val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-                cameraSpinner.adapter = adapter
-                cameraSpinner.setSelection(0)
-                cameraSpinner.setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(parent: android.widget.AdapterView<*>, view: View?, position: Int, id: Long) {
-                        val camId = try { mgr.cameraIdList[position] } catch (_: Exception) { null }
-                        if (camId != null) {
-                            // Tell the service to switch camera
-                            val intent = Intent(this@CameraControlActivity, StreamService::class.java).apply {
-                                action = "com.example.handycam.ACTION_SET_CAMERA"
-                                putExtra("camera", camId)
-                            }
-                            startService(intent)
-                        }
-                    }
-                    override fun onNothingSelected(parent: android.widget.AdapterView<*>) {}
-                })
+                    "$id ($facing)"
+                } catch (_: Exception) { id }
             }
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            cameraSpinner.adapter = adapter
+            cameraSpinner.setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>, view: View?, position: Int, id: Long) {
+                    val camId = try { mgr.cameraIdList[position] } catch (_: Exception) { null } ?: return
+                    startService(Intent(this@CameraControlActivity, StreamService::class.java).apply {
+                        action = "com.example.handycam.ACTION_SET_CAMERA"
+                        putExtra("camera", camId)
+                    })
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>) {}
+            })
         } catch (_: Exception) {}
+    }
 
-        // gestures: tap to focus, long-press then slide vertically to change exposure
+    private fun setupZoomControls() {
+        zoomSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) applyZoom(progress / 100f)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar) {}
+        })
+
+        scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val info = SharedSurfaceProvider.cameraInfo
+                val maxZoom = info?.zoomState?.value?.maxZoomRatio ?: 8f
+                val minZoom = info?.zoomState?.value?.minZoomRatio ?: 1f
+                val currentZoom = minZoom + (maxZoom - minZoom) * currentLinearZoom
+                val newZoom = (currentZoom * detector.scaleFactor).coerceIn(minZoom, maxZoom)
+                val linear = ((newZoom - minZoom) / (maxZoom - minZoom)).coerceIn(0f, 1f)
+                applyZoom(linear)
+                return true
+            }
+        })
+    }
+
+    private fun applyZoom(linearZoom: Float) {
+        currentLinearZoom = linearZoom
+        settingsManager.setZoom(linearZoom)
+        val info = SharedSurfaceProvider.cameraInfo
+        val zoomRatio = info?.zoomState?.value?.let { state ->
+            state.minZoomRatio + (state.maxZoomRatio - state.minZoomRatio) * linearZoom
+        } ?: (1f + 7f * linearZoom)
+        zoomLabel.text = String.format("%.1fx", zoomRatio)
+    }
+
+
+    private fun setupTouchGestures() {
         val gd = object : android.view.GestureDetector.SimpleOnGestureListener() {
-            override fun onSingleTapUp(e: android.view.MotionEvent): Boolean {
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
                 performTapToFocus(e.x, e.y)
                 return true
             }
-
-            override fun onLongPress(e: android.view.MotionEvent) {
+            override fun onLongPress(e: MotionEvent) {
                 adjustingExposure = true
                 exposureStartY = e.y
-                // snapshot current exposure index
                 lastExposureIndex = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationIndex ?: 0
                 exposureLabel.visibility = View.VISIBLE
             }
         }
-
         val gestureDetector = android.view.GestureDetector(this, gd)
 
         previewView.setOnTouchListener { _, motion ->
-            gestureDetector.onTouchEvent(motion)
+            scaleGestureDetector.onTouchEvent(motion)
+            if (!scaleGestureDetector.isInProgress) {
+                gestureDetector.onTouchEvent(motion)
+            }
             when (motion.actionMasked) {
                 MotionEvent.ACTION_MOVE -> {
-                    if (adjustingExposure) {
+                    if (adjustingExposure && !scaleGestureDetector.isInProgress) {
                         val dy = exposureStartY - motion.y
                         val height = previewView.height.coerceAtLeast(1)
-                        // map dy to exposure range
                         val range = SharedSurfaceProvider.cameraInfo?.exposureState?.exposureCompensationRange
                         if (range != null) {
                             val span = range.upper - range.lower
@@ -252,6 +258,7 @@ class CameraControlActivity : AppCompatActivity() {
                                 try {
                                     SharedSurfaceProvider.cameraControl?.setExposureCompensationIndex(target)
                                     exposureLabel.text = "EV: $target"
+                                    settingsManager.setExposure(target)
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Failed setting exposure index", e)
                                 }
@@ -268,63 +275,41 @@ class CameraControlActivity : AppCompatActivity() {
             }
             true
         }
-        
-        // Register receiver to know when camera is ready
-        cameraReadyReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                Log.i(TAG, "Camera ready signal received")
-                runOnUiThread {
-                    updateCameraControls()
-                }
-            }
-        }
-        registerReceiver(cameraReadyReceiver, IntentFilter("com.example.handycam.CAMERA_READY"), Context.RECEIVER_NOT_EXPORTED)
-
-        // permission check
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        } else setupPreview()
     }
 
     private fun setupPreview() {
-        // For both modes, provide surface provider to the service
-        // The service will handle Camera2 or CameraX appropriately
         SharedSurfaceProvider.previewSurfaceProvider = previewView.surfaceProvider
-        
-        // Notify service to reconfigure with preview
-        val intent = Intent(this, StreamService::class.java).apply {
+        startService(Intent(this, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
             putExtra("surfaceToken", if (useCameraX) "camerax_preview" else "camera2_preview")
-        }
-        startService(intent)
-        
-        Log.i(TAG, "Setup preview surface provider for ${if (useCameraX) "CameraX" else "Camera2"} mode")
-        
-        // Update controls with current camera state
+        })
         updateCameraControls()
     }
-    
+
     private fun updateCameraControls() {
-        // Update UI with current camera state from shared provider
         SharedSurfaceProvider.cameraInfo?.let { info ->
-            val torchState = info.torchState.value
-            try {
-                // set lightning bolt and tint it to indicate state
-                flashBtn.setImageResource(R.drawable.ic_flash)
-                val color = if (torchState == androidx.camera.core.TorchState.ON) android.graphics.Color.YELLOW else android.graphics.Color.WHITE
-                flashBtn.imageTintList = android.content.res.ColorStateList.valueOf(color)
-            } catch (_: Exception) {}
+            val torchOn = info.torchState.value == androidx.camera.core.TorchState.ON
+            updateFlashButton(torchOn)
             val ev = info.exposureState.exposureCompensationIndex
             exposureLabel.text = "EV: $ev"
+            info.zoomState.value?.let { zoomState ->
+                val linear = ((zoomState.zoomRatio - zoomState.minZoomRatio) /
+                        (zoomState.maxZoomRatio - zoomState.minZoomRatio)).coerceIn(0f, 1f)
+                currentLinearZoom = linear
+                zoomSeekBar.progress = (linear * 100).toInt()
+                zoomLabel.text = String.format("%.1fx", zoomState.zoomRatio)
+            }
         } ?: run {
-            // If CameraInfo not available yet, try to infer flash availability from CameraManager
             try {
                 val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
                 val prefCam = prefs.getString("camera", null)
                 val mgr = cameraManager
-                val camIdFallback = try { if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition) } catch (_: Exception) { null }
-                if (camIdFallback != null) {
-                    val chars = mgr?.getCameraCharacteristics(camIdFallback)
+                val camId = try {
+                    if (prefCam != null && mgr?.cameraIdList?.contains(prefCam) == true) prefCam
+                    else mgr?.cameraIdList?.getOrNull(cameraSpinner.selectedItemPosition)
+                } catch (_: Exception) { null }
+                if (camId != null) {
+                    val chars = mgr?.getCameraCharacteristics(camId)
                     val hasFlash = chars?.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                     flashBtn.setImageResource(R.drawable.ic_flash)
                     flashBtn.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
@@ -332,6 +317,14 @@ class CameraControlActivity : AppCompatActivity() {
                 }
             } catch (_: Exception) {}
         }
+    }
+
+    private fun updateFlashButton(enabled: Boolean) {
+        try {
+            flashBtn.setImageResource(R.drawable.ic_flash)
+            val color = if (enabled) android.graphics.Color.YELLOW else android.graphics.Color.WHITE
+            flashBtn.imageTintList = android.content.res.ColorStateList.valueOf(color)
+        } catch (_: Exception) {}
     }
 
     private fun performTapToFocus(x: Float, y: Float) {
@@ -342,33 +335,20 @@ class CameraControlActivity : AppCompatActivity() {
                 .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
                 .build()
             SharedSurfaceProvider.cameraControl?.startFocusAndMetering(action)
-            // show focus ring at touch point
-            try {
-                val ring = focusRing
-                val halfW = ring.width / 2f
-                val halfH = ring.height / 2f
-                // position: previewView's coordinate space -> parent FrameLayout
-                val location = IntArray(2)
-                previewView.getLocationOnScreen(location)
-                val pvX = location[0]
-                val pvY = location[1]
-                // get parent location
-                val parentLoc = IntArray(2)
-                (ring.parent as View).getLocationOnScreen(parentLoc)
-                val relX = x + pvX - parentLoc[0]
-                val relY = y + pvY - parentLoc[1]
-                ring.translationX = relX - halfW
-                ring.translationY = relY - halfH
-                ring.scaleX = 0.6f
-                ring.scaleY = 0.6f
-                ring.alpha = 1f
-                ring.visibility = View.VISIBLE
-                ring.animate().scaleX(1f).scaleY(1f).alpha(0f).setDuration(650).withEndAction {
-                    ring.visibility = View.GONE
-                }.start()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to show focus ring", e)
-            }
+            val ring = focusRing
+            val halfW = ring.width / 2f
+            val halfH = ring.height / 2f
+            val location = IntArray(2)
+            previewView.getLocationOnScreen(location)
+            val parentLoc = IntArray(2)
+            (ring.parent as View).getLocationOnScreen(parentLoc)
+            ring.translationX = x + location[0] - parentLoc[0] - halfW
+            ring.translationY = y + location[1] - parentLoc[1] - halfH
+            ring.scaleX = 0.6f; ring.scaleY = 0.6f; ring.alpha = 1f
+            ring.visibility = View.VISIBLE
+            ring.animate().scaleX(1f).scaleY(1f).alpha(0f).setDuration(650).withEndAction {
+                ring.visibility = View.GONE
+            }.start()
         } catch (e: Exception) {
             Log.w(TAG, "Tap-to-focus failed", e)
         }
@@ -376,23 +356,14 @@ class CameraControlActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        
-        // Clean up preview surface
-        if (useCameraX) {
-            SharedSurfaceProvider.previewSurfaceProvider = null
-        } else {
-            SharedSurfaceProvider.previewSurface = null
-        }
-        
-        // Notify service to remove preview
+        if (useCameraX) SharedSurfaceProvider.previewSurfaceProvider = null
+        else SharedSurfaceProvider.previewSurface = null
         try {
-            val intent = Intent(this, StreamService::class.java).apply {
+            startService(Intent(this, StreamService::class.java).apply {
                 action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
                 putExtra("surfaceToken", null as String?)
-            }
-            startService(intent)
+            })
         } catch (_: Exception) {}
-        
         try { cameraReadyReceiver?.let { unregisterReceiver(it) } } catch (_: Exception) {}
     }
 }

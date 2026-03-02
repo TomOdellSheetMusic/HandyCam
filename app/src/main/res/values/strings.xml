@@ -1,3 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">HandyCam</string>
+    <string name="start_server">Start Server</string>
+    <string name="stop_server">Stop Server</string>
+    <string name="start_https_server">Start HTTPS Server</string>
+    <string name="stop_https_server">Stop HTTPS Server</string>
+    <string name="server_running_on_port">Server running on port %1$d</string>
+    <string name="server_stopped">Server stopped</string>
+    <string name="camera_back">back</string>
+    <string name="camera_front">front</string>
+    <string name="server_running_on_port_with_access">Server running on port %1$d\nAccess at: https://%2$s:%3$d</string>
 </resources>

@@ -139,6 +139,12 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun updateCamera(camera: String) {
+        viewModelScope.launch {
+            settingsRepository.updateCamera(camera)
+        }
+    }
+
     fun updateHost(host: String) {
         viewModelScope.launch {
             settingsRepository.updateHost(host)
