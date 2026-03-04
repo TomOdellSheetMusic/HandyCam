@@ -1,4 +1,3 @@
 <resources>
-
-    <style name="Theme.HandyCam" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.HandyCam" parent="Theme.AppCompat.DayNight.NoActionBar" />
 </resources>

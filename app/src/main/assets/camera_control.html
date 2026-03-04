@@ -5,262 +5,265 @@
     <title>HandyCam Camera Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
+        *, *::before, *::after { box-sizing: border-box; }
+
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             margin: 0;
             padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f0f0f0;
             min-height: 100vh;
+            color: #1a1a1a;
         }
 
         .container {
-            max-width: 600px;
+            max-width: 560px;
             margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 20px;
+        }
+
+        header h1 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin: 0 0 4px;
+        }
+
+        header p {
+            margin: 0;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .card {
             background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-        }
-
-        h1 {
-            color: #333;
-            margin-top: 0;
-            text-align: center;
-        }
-
-        .status {
-            padding: 15px;
+            border: 1px solid #e0e0e0;
             border-radius: 8px;
-            margin: 20px 0;
-            text-align: center;
-            font-weight: bold;
+            padding: 16px;
+            margin-bottom: 12px;
         }
 
-        .status.active {
-            background: #d4edda;
-            color: #155724;
+        .card-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #666;
+            margin: 0 0 12px;
         }
 
-        .status.inactive {
-            background: #f8d7da;
-            color: #721c24;
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid;
         }
+
+        .status-badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-badge.active  { background: #f0faf3; border-color: #b0dfc0; color: #1a6e37; }
+        .status-badge.active .dot  { background: #28a745; }
+        .status-badge.inactive { background: #fdf3f3; border-color: #f0c0c0; color: #7a2020; }
+        .status-badge.inactive .dot { background: #dc3545; }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 6px 16px;
+            font-size: 0.875rem;
+        }
+
+        .info-grid .key { color: #666; }
+        .info-grid .val { font-weight: 500; }
 
         button {
+            display: block;
             width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            font-size: 16px;
-            border: none;
-            border-radius: 8px;
+            padding: 10px 16px;
+            margin: 6px 0;
+            font-size: 0.9rem;
+            font-family: inherit;
+            border: 1px solid transparent;
+            border-radius: 6px;
             cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s;
+            font-weight: 500;
+            transition: opacity 0.15s, background 0.15s;
         }
 
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button:not(:disabled):hover { opacity: 0.88; }
+
+        .btn-primary  { background: #1a73e8; color: white; }
+        .btn-danger   { background: #dc3545; color: white; }
+        .btn-secondary { background: white; color: #333; border-color: #ccc; }
+
+        .toggle-btn {
+            background: white;
+            color: #333;
+            border-color: #ccc;
+        }
+        .toggle-btn.active {
+            background: #e8f0fe;
+            border-color: #1a73e8;
+            color: #1a73e8;
         }
 
-        button:active {
-            transform: translateY(0);
-        }
-
-        .btn-start {
-            background: #28a745;
-            color: white;
-        }
-
-        .btn-stop {
-            background: #dc3545;
-            color: white;
-        }
-
-        .btn-switch {
-            background: #007bff;
-            color: white;
-        }
-
-        .btn-refresh {
-            background: #6c757d;
-            color: white;
-        }
-
-        .info {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-        }
-
-        .info-item {
+        .control-row {
             display: flex;
-            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
             margin: 8px 0;
-            padding: 8px 0;
-            border-bottom: 1px solid #dee2e6;
+            font-size: 0.875rem;
         }
 
-        .info-item:last-child {
-            border-bottom: none;
+        .control-row label {
+            min-width: 120px;
+            color: #444;
         }
 
-        .label {
-            font-weight: bold;
-            color: #495057;
+        .control-row input[type="range"] {
+            flex: 1;
+            accent-color: #1a73e8;
         }
 
-        .value {
-            color: #007bff;
+        .control-row .val-label {
+            min-width: 36px;
+            text-align: right;
+            font-weight: 500;
+            font-size: 0.85rem;
         }
 
         .message {
-            padding: 12px;
-            border-radius: 8px;
-            margin: 10px 0;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin: 8px 0;
+            font-size: 0.875rem;
             display: none;
         }
 
-        .message.success {
-            background: #d4edda;
-            color: #155724;
-            display: block;
-        }
+        .message.success { background: #f0faf3; border: 1px solid #b0dfc0; color: #1a6e37; display: block; }
+        .message.error   { background: #fdf3f3; border: 1px solid #f0c0c0; color: #7a2020; display: block; }
 
-        .message.error {
-            background: #f8d7da;
-            color: #721c24;
-            display: block;
-        }
-
-        .control-group {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-        }
-
-        .control-label {
-            font-weight: bold;
-            color: #495057;
-            margin-bottom: 8px;
+        .camera-btn-row {
             display: flex;
-            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
         }
 
-        input[type="range"] {
-            width: 100%;
-            height: 6px;
-            border-radius: 3px;
-            cursor: pointer;
+        .camera-btn-row button {
+            flex: 1;
+            min-width: 100px;
+            margin: 0;
         }
 
-        input[type="number"] {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #dee2e6;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-
-        .toggle-btn {
-            width: 100%;
-            padding: 10px;
-            margin: 8px 0;
-            border: 2px solid #007bff;
-            background: white;
-            color: #007bff;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s;
-        }
-
-        .toggle-btn.active {
-            background: #007bff;
-            color: white;
+        #torchNote {
+            font-size: 0.8rem;
+            color: #dc3545;
+            margin-top: 4px;
+            display: none;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>📹 Camera Control</h1>
+        <header>
+            <h1>HandyCam</h1>
+            <p>Camera Control</p>
+        </header>
 
-        <div id="status" class="status inactive">Status: Checking...</div>
+        <div class="card">
+            <div class="card-title">Status</div>
+            <div id="status" class="status-badge inactive">
+                <span class="dot"></span>
+                <span id="statusText">Checking...</span>
+            </div>
+        </div>
 
         <div id="message" class="message"></div>
 
-        <div class="info" id="info" style="display:none;">
-            <div class="info-item">
-                <span class="label">Stream Port:</span>
-                <span class="value" id="port">-</span>
-            </div>
-            <div class="info-item">
-                <span class="label">Current Camera:</span>
-                <span class="value" id="camera">-</span>
-            </div>
-            <div class="info-item">
-                <span class="label">Resolution:</span>
-                <span class="value" id="resolution">-</span>
-            </div>
-            <div class="info-item">
-                <span class="label">FPS:</span>
-                <span class="value" id="fps">-</span>
-            </div>
-            <div class="info-item">
-                <span class="label">JPEG Quality:</span>
-                <span class="value" id="jpegQuality">-</span>
+        <div class="card" id="info" style="display:none;">
+            <div class="card-title">Stream Info</div>
+            <div class="info-grid">
+                <span class="key">Port</span>       <span class="val" id="port">-</span>
+                <span class="key">Camera</span>     <span class="val" id="camera">-</span>
+                <span class="key">Resolution</span> <span class="val" id="resolution">-</span>
+                <span class="key">FPS</span>        <span class="val" id="fps">-</span>
+                <span class="key">JPEG Quality</span> <span class="val" id="jpegQuality">-</span>
             </div>
         </div>
 
-        <button class="btn-start" onclick="startCamera()">▶️ Start Camera Stream</button>
-        <button class="btn-stop" onclick="stopCamera()">⏹️ Stop Camera Stream</button>
-
-        <div class="control-group" id="cameraList">
-            <div class="control-label">Camera Selection</div>
-            <div id="cameraButtons">Loading cameras...</div>
+        <div class="card">
+            <div class="card-title">Stream</div>
+            <button class="btn-primary" onclick="startCamera()">Start Stream</button>
+            <button class="btn-danger" onclick="stopCamera()">Stop Stream</button>
         </div>
 
-        <div class="control-group">
-            <div class="control-label">
-                <span>FPS: <span id="fpsValue">30</span></span>
+        <div class="card" id="cameraList">
+            <div class="card-title">Camera Selection</div>
+            <div class="camera-btn-row" id="cameraButtons">Loading...</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">FPS</div>
+            <div class="control-row">
+                <label>Frame rate</label>
+                <input type="range" id="fpsSlider" min="15" max="60" value="30" oninput="setFps(this.value)">
+                <span class="val-label"><span id="fpsValue">30</span></span>
             </div>
-            <input type="range" id="fpsSlider" min="15" max="60" value="30" onchange="setFps(this.value)">
-            <button class="btn-refresh" id="applyFpsBtn" onclick="applyFps()">Apply FPS (restart)</button>
+            <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
         </div>
 
-        <div class="control-group">
-            <div class="control-label">
-                <span>JPEG Quality: <span id="jpegValue">85</span>%</span>
+        <div class="card" id="jpegCard">
+            <div class="card-title">JPEG Quality</div>
+            <div class="control-row">
+                <label>Quality</label>
+                <input type="range" id="jpegSlider" min="50" max="100" value="85" oninput="setJpegQuality(this.value)">
+                <span class="val-label"><span id="jpegValue">85</span>%</span>
             </div>
-            <input type="range" id="jpegSlider" min="50" max="100" value="85" onchange="setJpegQuality(this.value)">
-            <button class="btn-refresh" id="applyJpegBtn" onclick="applyJpeg()">Apply JPEG (restart)</button>
+            <button class="btn-secondary" id="applyJpegBtn" onclick="applyJpeg()">Apply (restarts stream)</button>
         </div>
 
-        <div class="control-group" id="avcGroup" style="display:none;">
-            <div class="control-label">
-                <span>AVC Bitrate (kbps): <span id="avcValue">2000</span></span>
+        <div class="card" id="avcGroup" style="display:none;">
+            <div class="card-title">AVC Bitrate</div>
+            <div class="control-row">
+                <label>Bitrate (kbps)</label>
+                <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" oninput="setAvcBitrate(this.value)">
+                <span class="val-label" id="avcValue">2000</span>
             </div>
-            <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" onchange="setAvcBitrate(this.value)">
-            <button class="btn-refresh" id="applyAvcBtn" onclick="applyAvc()">Apply AVC (restart)</button>
+            <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply (restarts stream)</button>
         </div>
 
-        <div class="control-group">
-            <div class="control-label">
-                <span>Exposure: <span id="exposureValue">0</span></span>
+        <div class="card" id="exposureCard">
+            <div class="card-title">Exposure</div>
+            <div class="control-row">
+                <label>Compensation</label>
+                <input type="range" id="exposureSlider" min="-50" max="50" value="0" oninput="setExposure(this.value)">
+                <span class="val-label"><span id="exposureValue">0</span></span>
             </div>
-            <input type="range" id="exposureSlider" min="-50" max="50" value="0" onchange="setExposure(this.value)">
-        </div>
-        <div class="control-group">
-            <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">💡 Torch: OFF</button>
-            <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">🎞️ Use AVC: OFF</button>
-            <div id="torchNote" style="font-size:12px;color:#666;margin-top:6px;display:none;color:darkred">Torch only works while stream is started</div>
-            <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">☀️ Auto Exposure: ON</button>
         </div>
 
-        <button class="btn-refresh" onclick="checkStatus()">🔄 Refresh Status</button>
+        <div class="card">
+            <div class="card-title">Controls</div>
+            <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
+            <div id="torchNote">Torch only works while stream is active</div>
+            <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">Codec: MJPEG</button>
+            <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">Auto Exposure: ON</button>
+        </div>
+
+        <div class="card">
+            <button class="btn-secondary" onclick="checkStatus(); checkCameraSettings();">Refresh</button>
+        </div>
     </div>
 
     <script>
@@ -280,17 +283,16 @@
                 const response = await fetch('/status');
                 const data = await response.json();
 
-                const statusEl = document.getElementById('status');
+                const badge = document.getElementById('status');
+                const text = document.getElementById('statusText');
                 if (data.streaming === true) {
-                    statusEl.textContent = '🟢 Camera is Streaming on port ' + data.port;
-                    statusEl.className = 'status active';
-                    // enable torch control while streaming
+                    text.textContent = 'Streaming on port ' + data.port;
+                    badge.className = 'status-badge active';
                     try { document.getElementById('torchBtn').disabled = false; } catch (_) {}
                     try { document.getElementById('torchNote').style.display = 'none'; } catch (_) {}
                 } else {
-                    statusEl.textContent = '🔴 Camera is Stopped';
-                    statusEl.className = 'status inactive';
-                    // disable torch control when not streaming
+                    text.textContent = 'Not streaming';
+                    badge.className = 'status-badge inactive';
                     try { document.getElementById('torchBtn').disabled = true; } catch (_) {}
                     try { document.getElementById('torchNote').style.display = 'block'; } catch (_) {}
                 }
@@ -333,29 +335,28 @@
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
                 avcBitrate = data.avcBitrate || 2000;
-                const jpegGroup = document.getElementById('jpegSlider').parentElement;
+                const jpegCard = document.getElementById('jpegCard');
                 const avcGroup = document.getElementById('avcGroup');
                 if (avcEnabled) {
-                    jpegGroup.style.display = 'none';
-                    /*avcGroup.style.display = '';
-                    document.getElementById('avcSlider').value = avcBitrate;
-                    document.getElementById('avcValue').textContent = avcBitrate;*/
+                    jpegCard.style.display = 'none';
                 } else {
-                    jpegGroup.style.display = '';
-                    //avcGroup.style.display = 'none';
+                    jpegCard.style.display = '';
                 }
 
                 document.getElementById('exposureSlider').value = data.exposure;
                 document.getElementById('exposureValue').textContent = data.exposure;
 
                 // auto exposure visibility
-                const exposureGroup = document.getElementById('exposureSlider').parentElement;
                 const autoExposureEnabledLocal = data.autoExposure === true;
                 // When auto-exposure is enabled, hide manual exposure slider
                 if (autoExposureEnabledLocal) {
-                    exposureGroup.style.display = 'none';
+                    document.getElementById('exposureCard').style.display = 'none';
+                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: ON';
+                    document.getElementById('autoExposureBtn').classList.add('active');
                 } else {
-                    exposureGroup.style.display = '';
+                    document.getElementById('exposureCard').style.display = '';
+                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: OFF';
+                    document.getElementById('autoExposureBtn').classList.remove('active');
                 }
 
                 // remember auto flags for UI
@@ -378,18 +379,18 @@
             const useAvcBtn = document.getElementById('useAvcBtn');
 
             if (torchEnabled) {
-                torchBtn.textContent = '💡 Torch: ON';
+                torchBtn.textContent = 'Torch: ON';
                 torchBtn.classList.add('active');
             } else {
-                torchBtn.textContent = '💡 Torch: OFF';
+                torchBtn.textContent = 'Torch: OFF';
                 torchBtn.classList.remove('active');
             }
             if (useAvcBtn) {
                 if (avcEnabled) {
-                    useAvcBtn.textContent = '🎞️ Use AVC: ON';
+                    useAvcBtn.textContent = 'Codec: H.264 (AVC)';
                     useAvcBtn.classList.add('active');
                 } else {
-                    useAvcBtn.textContent = '🎞️ Use AVC: OFF';
+                    useAvcBtn.textContent = 'Codec: MJPEG';
                     useAvcBtn.classList.remove('active');
                 }
             }
@@ -399,10 +400,10 @@
             const useAvcBtn = document.getElementById('useAvcBtn');
             if (!useAvcBtn) return;
             if (avcEnabled) {
-                useAvcBtn.textContent = '🎞️ Use AVC: ON';
+                useAvcBtn.textContent = 'Codec: H.264 (AVC)';
                 useAvcBtn.classList.add('active');
             } else {
-                useAvcBtn.textContent = '🎞️ Use AVC: OFF';
+                useAvcBtn.textContent = 'Codec: MJPEG';
                 useAvcBtn.classList.remove('active');
             }
         }

@@ -46,3 +46,4 @@ debug.keystore
 # Misc
 *.class
 
+.github/copilot-instructions.md

@@ -12,6 +12,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import com.example.handycam.data.model.api.ApiResponse
+import com.example.handycam.data.model.api.CameraListItem
+import com.example.handycam.data.model.api.CameraStatusResponse
+import com.example.handycam.data.model.api.ServerInfo
+import com.example.handycam.data.model.api.ServerStatus
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.application.*
@@ -53,63 +58,19 @@ private const val ACTION_STOP_SERVER = "com.example.handycam.ACTION_STOP_HTTPS_S
  * Foreground service that runs a Ktor HTTPS server.
  * The server runs on a specified port with SSL/TLS encryption.
  */
+@dagger.hilt.android.AndroidEntryPoint
 class KtorHttpsServerService : LifecycleService() {
     
     private var server: NettyApplicationEngine? = null
     private var serverPort = 8443
     private var isRunning = false
-    private lateinit var settingsManager: SettingsManager
-       @Serializable
-    data class ServerStatus(
-        val status: String,
-        val streaming: Boolean,
-        val port: Int,
-        val uptime: Long
-    )
-    
-    @Serializable
-    data class ServerInfo(
-        val name: String,
-        val version: String,
-        val protocol: String
-    )
-
-    @Serializable
-    data class CameraStatus(
-        val streaming: Boolean,
-        val port: Int,
-        val camera: String,
-        val width: Int,
-        val height: Int,
-        val fps: Int,
-        val jpegQuality: Int,
-        val useAvc: Boolean,
-        val torchEnabled: Boolean,
-        val autoFocus: Boolean,
-        val exposure: Int
-        , val avcBitrate: Int
-    )
-
-    @Serializable
-    data class ApiResponse(
-        val success: Boolean,
-        val message: String
-    )
-
-    @Serializable
-    data class CameraInfo(
-        val id: String,
-        val label: String,
-        val facing: String,
-        val focalDesc: String
-    )
+    @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
     
     private var startTime: Long = 0
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        settingsManager = SettingsManager.getInstance(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -122,7 +83,7 @@ class KtorHttpsServerService : LifecycleService() {
             }
             ACTION_STOP_SERVER -> {
                 stopHttpsServer()
-                stopForeground(true)
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
@@ -253,43 +214,57 @@ class KtorHttpsServerService : LifecycleService() {
                     <!DOCTYPE html>
                     <html>
                     <head>
-                        <title>HandyCam HTTPS Server</title>
+                        <title>HandyCam</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
                         <style>
-                            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-                            .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                            h1 { color: #333; }
-                            .endpoint { background: #f8f8f8; padding: 10px; margin: 10px 0; border-left: 3px solid #4CAF50; }
-                            code { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; }
+                            *, *::before, *::after { box-sizing: border-box; }
+                            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; background: #f0f0f0; color: #1a1a1a; }
+                            .container { max-width: 520px; margin: 0 auto; }
+                            h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 4px; }
+                            p { margin: 0 0 20px; font-size: 0.85rem; color: #666; }
+                            .card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+                            .card-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #666; margin: 0 0 10px; }
+                            .endpoint { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.875rem; margin: 6px 0; }
+                            .method { font-weight: 600; color: #1a73e8; }
+                            .path { color: #1a1a1a; }
+                            .desc { grid-column: 2; color: #666; font-size: 0.8rem; }
+                            a { color: #1a73e8; }
                         </style>
                     </head>
                     <body>
                         <div class="container">
-                            <h1>🚀 HandyCam HTTPS Server</h1>
-                            <p>Server is running successfully!</p>
-                            <h2>Available Endpoints:</h2>
-                            <div class="endpoint">
-                                <strong>GET /</strong> - This welcome page
+                            <h1>HandyCam</h1>
+                            <p>HTTPS Control Server</p>
+                            <div class="card">
+                                <div class="card-title">Web UI</div>
+                                <a href="/camera">Open Camera Control</a>
                             </div>
-                            <div class="endpoint">
-                                <strong>GET /status</strong> - Server status (JSON)
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /info</strong> - Server information (JSON)
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /health</strong> - Health check
-                            </div>
-                            <div class="endpoint">
-                                <strong>GET /camera</strong> - Camera control web UI
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/start</strong> - Start camera streaming
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/stop</strong> - Stop camera streaming
-                            </div>
-                            <div class="endpoint">
-                                <strong>POST /api/camera/switch</strong> - Switch camera (body: {"camera": "back|front"})
+                            <div class="card">
+                                <div class="card-title">API Endpoints</div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/status</span>
+                                    <span class="desc">Server status (JSON)</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/info</span>
+                                    <span class="desc">Server information (JSON)</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">GET</span><span class="path">/health</span>
+                                    <span class="desc">Health check</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/start</span>
+                                    <span class="desc">Start camera streaming</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/stop</span>
+                                    <span class="desc">Stop camera streaming</span>
+                                </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/camera/switch</span>
+                                    <span class="desc">Switch camera — body: {"camera": "back|front"}</span>
+                                </div>
                             </div>
                         </div>
                     </body>
@@ -303,7 +278,7 @@ class KtorHttpsServerService : LifecycleService() {
                 val uptime = System.currentTimeMillis() - startTime
                 call.respond(ServerStatus(
                     status = "running",
-                    streaming = (settingsManager.isStreaming.value ?: false),
+                    streaming = (streamStateHolder.isStreaming.value),
                     port = serverPort,
                     uptime = uptime
                 ))
@@ -323,28 +298,28 @@ class KtorHttpsServerService : LifecycleService() {
             
             // Add custom routes here as needed
             get("/api/camera/status") {
-                val status = CameraStatus(
-                    streaming = (settingsManager.isStreaming.value ?: false),
-                    port = (settingsManager.port.value ?: 4747),
-                    camera = (settingsManager.camera.value ?: "back"),
-                    width = (settingsManager.width.value ?: 1920),
-                    height = (settingsManager.height.value ?: 1080),
-                    fps = (settingsManager.fps.value ?: 30),
-                    jpegQuality = (settingsManager.jpegQuality.value ?: 85),
-                    useAvc = (settingsManager.useAvc.value ?: false),
-                    torchEnabled = (settingsManager.torchEnabled.value ?: false),
-                    autoFocus = (settingsManager.autoFocus.value ?: true),
-                    exposure = (settingsManager.exposure.value ?: 0),
-                    avcBitrate = (settingsManager.avcBitrate.value ?: -1)
+                val status = CameraStatusResponse(
+                    streaming = (streamStateHolder.isStreaming.value),
+                    port = (streamStateHolder.port.value),
+                    camera = (streamStateHolder.camera.value),
+                    width = (streamStateHolder.width.value),
+                    height = (streamStateHolder.height.value),
+                    fps = (streamStateHolder.fps.value),
+                    jpegQuality = (streamStateHolder.jpegQuality.value),
+                    useAvc = (streamStateHolder.useAvc.value),
+                    torchEnabled = (streamStateHolder.torchEnabled.value),
+                    autoFocus = (streamStateHolder.autoFocus.value),
+                    exposure = (streamStateHolder.exposure.value),
+                    avcBitrate = (streamStateHolder.avcBitrate.value)
                 )
                 call.respond(status)
             }
 
             get("/api/camera/list") {
-                val list = mutableListOf<CameraInfo>()
+                val list = mutableListOf<CameraListItem>()
                 // logical picks
-                list.add(CameraInfo("back", "back", "back", ""))
-                list.add(CameraInfo("front", "front", "front", ""))
+                list.add(CameraListItem("back", "back", "back", ""))
+                list.add(CameraListItem("front", "front", "front", ""))
 
                 try {
                     val cm = this@KtorHttpsServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -359,7 +334,7 @@ class KtorHttpsServerService : LifecycleService() {
                             val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                             val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) String.format("f=%.1fmm", focalArr[0]) else ""
                             val label = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
-                            list.add(CameraInfo(id, label, facing, focalDesc))
+                            list.add(CameraListItem(id, label, facing, focalDesc))
                         } catch (_: Exception) { }
                     }
                 } catch (e: Exception) {
@@ -373,18 +348,18 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_START"
-                        putExtra("host", settingsManager.host.value ?: "0.0.0.0")
-                        putExtra("port", settingsManager.port.value ?: 4747)
-                        putExtra("width", settingsManager.width.value ?: 1080)
-                        putExtra("height", settingsManager.height.value ?: 1920)
-                        putExtra("camera", settingsManager.camera.value ?: "back")
-                        putExtra("jpegQuality", settingsManager.jpegQuality.value ?: 85)
-                        putExtra("targetFps", settingsManager.fps.value ?: 30)
-                        putExtra("avcBitrate", settingsManager.avcBitrate.value ?: -1)
-                        putExtra("useAvc", settingsManager.useAvc.value ?: false)
+                        putExtra("host", streamStateHolder.host.value)
+                        putExtra("port", streamStateHolder.port.value)
+                        putExtra("width", streamStateHolder.width.value)
+                        putExtra("height", streamStateHolder.height.value)
+                        putExtra("camera", streamStateHolder.camera.value)
+                        putExtra("jpegQuality", streamStateHolder.jpegQuality.value)
+                        putExtra("targetFps", streamStateHolder.fps.value)
+                        putExtra("avcBitrate", streamStateHolder.avcBitrate.value)
+                        putExtra("useAvc", streamStateHolder.useAvc.value)
                     }
                     startService(intent)
-                    settingsManager.setStreaming(true)
+                    streamStateHolder.setStreaming(true)
                     call.respond(ApiResponse(true, "Camera streaming started"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to start camera: ${e.message}"))
@@ -397,7 +372,7 @@ class KtorHttpsServerService : LifecycleService() {
                         action = "com.example.handycam.ACTION_STOP"
                     }
                     startService(intent)
-                    settingsManager.setStreaming(false)
+                    streamStateHolder.setStreaming(false)
                     call.respond(ApiResponse(true, "Camera streaming stopped"))
                 } catch (e: Exception) { 
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to stop camera: ${e.message}"))
@@ -413,7 +388,7 @@ class KtorHttpsServerService : LifecycleService() {
                         putExtra("camera", camera)
                     }
                     startService(intent)
-                    settingsManager.setCamera(camera)
+                    streamStateHolder.setCamera(camera)
                     call.respond(ApiResponse(true, "Switched to $camera camera"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to switch camera: ${e.message}"))
@@ -425,7 +400,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val fps = params["fps"] ?: 30
-                    settingsManager.setFps(fps)
+                    streamStateHolder.setFps(fps)
                     call.respond(ApiResponse(true, "FPS updated to $fps"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid FPS value: ${e.message}"))
@@ -437,8 +412,8 @@ class KtorHttpsServerService : LifecycleService() {
                     val params = call.receive<Map<String, Int>>()
                     val width = params["width"] ?: 1080
                     val height = params["height"] ?: 1920
-                    settingsManager.setWidth(width)
-                    settingsManager.setHeight(height)
+                    streamStateHolder.setWidth(width)
+                    streamStateHolder.setHeight(height)
                     call.respond(ApiResponse(true, "Resolution updated to ${width}x${height}"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid resolution: ${e.message}"))
@@ -449,7 +424,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val quality = params["quality"] ?: 85
-                    settingsManager.setJpegQuality(quality)
+                    streamStateHolder.setJpegQuality(quality)
                     call.respond(ApiResponse(true, "JPEG quality updated to $quality"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid JPEG quality: ${e.message}"))
@@ -460,7 +435,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: false
-                    settingsManager.setUseAvc(enabled)
+                    streamStateHolder.setUseAvc(enabled)
                     call.respond(ApiResponse(true, "useAvc set to $enabled"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid use-avc value: ${e.message}"))
@@ -471,7 +446,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val bitrate = params["bitrate"] ?: -1
-                    settingsManager.setAvcBitrate(bitrate)
+                    streamStateHolder.setAvcBitrate(bitrate)
                     call.respond(ApiResponse(true, "AVC bitrate set to $bitrate"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid avc bitrate: ${e.message}"))
@@ -482,7 +457,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: false
-                    settingsManager.setTorchEnabled(enabled)
+                    streamStateHolder.setTorchEnabled(enabled)
                     call.respond(ApiResponse(true, "Torch ${if (enabled) "enabled" else "disabled"}"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Failed to set torch: ${e.message}"))
@@ -493,7 +468,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: true
-                    settingsManager.setAutoFocus(enabled)
+                    streamStateHolder.setAutoFocus(enabled)
                     call.respond(ApiResponse(true, "Auto focus ${if (enabled) "enabled" else "disabled"}"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Failed to set auto focus: ${e.message}"))
@@ -504,7 +479,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val exposure = params["exposure"] ?: 0
-                    settingsManager.setExposure(exposure)
+                    streamStateHolder.setExposure(exposure)
                     call.respond(ApiResponse(true, "Exposure updated to $exposure"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid exposure value: ${e.message}"))
@@ -515,7 +490,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val focus = params["focus"] ?: 0
-                    settingsManager.setFocus(focus)
+                    streamStateHolder.setFocus(focus)
                     call.respond(ApiResponse(true, "Focus updated to $focus"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid focus value: ${e.message}"))
@@ -526,7 +501,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val port = params["port"] ?: 4747
-                    settingsManager.setPort(port)
+                    streamStateHolder.setPort(port)
                     call.respond(ApiResponse(true, "Port updated to $port"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid port: ${e.message}"))
@@ -637,19 +612,7 @@ class KtorHttpsServerService : LifecycleService() {
     }
 
     private fun broadcastServerState(running: Boolean) {
-        val intent = Intent("com.example.handycam.HTTPS_SERVER_STATE").apply {
-                setPackage(packageName)
-            putExtra("isRunning", running)
-            putExtra("port", serverPort)
-        }
-        sendBroadcast(intent)
-        
-        // Also save to preferences
-        getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("httpsServerRunning", running)
-            .putInt("httpsServerPort", serverPort)
-            .apply()
+        streamStateHolder.setHttpsRunning(running)
     }
 
     override fun onDestroy() {
