@@ -611,16 +611,11 @@ class StreamService : LifecycleService() {
                     // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
                     // space regardless of phone orientation — ensures consistent landscape output
                     .setTargetRotation(android.view.Surface.ROTATION_90)
-                    .setResolutionSelector(
-                        ResolutionSelector.Builder()
-                            .setResolutionStrategy(
-                                ResolutionStrategy(
-                                    android.util.Size(w, h),
-                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-                                )
-                            )
-                            .build()
-                    )
+                    // Request an explicit target resolution. Using ResolutionSelector can
+                    // cause CameraX to pick an unexpected fallback (sometimes square).
+                    // setTargetResolution requests the desired Size directly which keeps
+                    // aspect ratio and avoids selecting strange square fallbacks.
+                    .setTargetResolution(android.util.Size(w, h))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
