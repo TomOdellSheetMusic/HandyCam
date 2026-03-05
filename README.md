@@ -10,7 +10,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 - Remotely start/stop the stream and control the camera settings using the webinterface or the restAPI
 - Runs in the background with the screen off
 - Connection over Wifi or USB (USB Debugging has to be enabled on the phone)
-  
+- Dark and light Theme depending on System Theme  
 ## Installation
 Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
 Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
