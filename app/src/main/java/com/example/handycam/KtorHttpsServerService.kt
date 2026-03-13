@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.app.ActivityManager
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyPairGenerator
@@ -345,7 +346,57 @@ class KtorHttpsServerService : LifecycleService() {
             }
             
             post("/api/camera/start") {
+
                 try {
+                    if (!isAppInForeground()) {
+                        getSharedPreferences(RemoteStartKeys.PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(RemoteStartKeys.KEY_PENDING_REMOTE_START, true)
+                            .apply()
+
+                        // Post a high-priority notification with a PendingIntent to open MainActivity
+                        val notifManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        val notifChannelId = "remote_start_action"
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            val channel = NotificationChannel(
+                                notifChannelId,
+                                "Remote Start Required",
+                                NotificationManager.IMPORTANCE_HIGH
+                            ).apply {
+                                description = "Tap to bring HandyCam to foreground and start streaming"
+                            }
+                            notifManager.createNotificationChannel(channel)
+                        }
+                        val openIntent = Intent(this@KtorHttpsServerService, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        }
+                        val openPending = PendingIntent.getActivity(
+                            this@KtorHttpsServerService,
+                            100,
+                            openIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                        val notif = NotificationCompat.Builder(this@KtorHttpsServerService, notifChannelId)
+                            .setContentTitle("HandyCam: Action Required")
+                            .setContentText("Tap to open app and start streaming")
+                            .setSmallIcon(R.drawable.ic_launcher_foreground)
+                            .setPriority(NotificationCompat.PRIORITY_HIGH)
+                            .setCategory(NotificationCompat.CATEGORY_CALL)
+                            .setContentIntent(openPending)
+                            .setAutoCancel(true)
+                            .build()
+                        notifManager.notify(1337, notif)
+
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            ApiResponse(
+                                false,
+                                "Start deferred: tap notification to open HandyCam and start streaming"
+                            )
+                        )
+                        return@post
+                    }
+
                     val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_START"
                         putExtra("host", streamStateHolder.host.value)
@@ -613,6 +664,20 @@ class KtorHttpsServerService : LifecycleService() {
 
     private fun broadcastServerState(running: Boolean) {
         streamStateHolder.setHttpsRunning(running)
+    }
+
+    private fun isAppInForeground(): Boolean {
+        return try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val myPkg = packageName
+            am.runningAppProcesses?.any { proc ->
+                proc.processName == myPkg &&
+                    proc.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+            } == true
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to determine app foreground state", e)
+            false
+        }
     }
 
     override fun onDestroy() {
