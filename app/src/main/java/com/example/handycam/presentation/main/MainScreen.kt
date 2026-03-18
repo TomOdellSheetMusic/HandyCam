@@ -2,23 +2,19 @@ package com.example.handycam.presentation.main
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -71,7 +67,7 @@ fun MainScreen(
     var jpegQuality by remember { mutableFloatStateOf(85f) }
     var avcBitrate by remember { mutableStateOf("") }
     var useAvc by remember { mutableStateOf(false) }
-    var httpsPort by remember { mutableStateOf("8443") }
+    var httpPort by remember { mutableStateOf("8080") }
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
     var isScreenSource by remember { mutableStateOf(false) }
@@ -369,7 +365,7 @@ fun MainScreen(
             // ── HTTPS server ──────────────────────────────────────────
             SectionCard(title = "Web Control Server") {
                 Text(
-                    "Start an HTTPS server to control the camera from a browser or the REST API.",
+                    "Start an HTTP server to control the camera from a browser or the REST API.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -379,7 +375,7 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
-                        value = httpsPort, onValueChange = { httpsPort = it },
+                        value = httpPort, onValueChange = { httpPort = it },
                         label = { Text("Port") },
                         modifier = Modifier.width(120.dp), singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -388,7 +384,7 @@ fun MainScreen(
                     Button(
                         onClick = {
                             if (httpsRunning) viewModel.stopHttpsServer()
-                            else viewModel.startHttpsServer(httpsPort.toIntOrNull() ?: 8443)
+                            else viewModel.startHttpsServer(httpPort.toIntOrNull() ?: 8443)
                         },
                         modifier = Modifier.weight(1f),
                         colors = if (httpsRunning) ButtonDefaults.buttonColors(
@@ -399,7 +395,7 @@ fun MainScreen(
                     }
                 }
                 if (httpsRunning) {
-                    val serverUrl = "https://$host:$httpsPort/camera"
+                    val serverUrl = "http://$host:$httpPort/camera"
                     val clipboard = LocalClipboardManager.current
                     Spacer(Modifier.height(4.dp))
                     Row(
