@@ -32,6 +32,7 @@ import kotlinx.serialization.Serializable
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.app.ActivityManager
+import android.content.ComponentName
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyPairGenerator
@@ -370,6 +371,9 @@ class KtorHttpsServerService : LifecycleService() {
                         val openIntent = Intent(this@KtorHttpsServerService, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                         }
+                        // Ensure the Intent is explicit about the target component and package
+                        openIntent.component = ComponentName(packageName, MainActivity::class.java.name)
+                        openIntent.setPackage(packageName)
                         val openPending = PendingIntent.getActivity(
                             this@KtorHttpsServerService,
                             100,
