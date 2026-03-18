@@ -30,3 +30,10 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Auto-Disover Phone Camera Capabilites
 - Document restAPI
 - Squash Bugs
+
+## License
+
+HandyCam is licensed using the GPL-3.0 license.
+
+The included icon is courtesy of [janjf93](https://pixabay.com/vectors/camera-lens-photos-photography-1933338/)
+(link back not required by author if used)
