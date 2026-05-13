@@ -28,6 +28,14 @@ class CameraControlViewModel @Inject constructor(
     val exposure: StateFlow<Int> = streamStateHolder.exposure
     val zoom: StateFlow<Float> = streamStateHolder.zoom
     val whiteBalance: StateFlow<Int> = streamStateHolder.whiteBalance
+    val whiteBalanceLocked: StateFlow<Boolean> = streamStateHolder.whiteBalanceLocked
+    val autoExposure: StateFlow<Boolean> = streamStateHolder.autoExposure
+    val iso: StateFlow<Int> = streamStateHolder.iso
+    val isoLocked: StateFlow<Boolean> = streamStateHolder.isoLocked
+    val shutterSpeedNs: StateFlow<Long> = streamStateHolder.shutterSpeedNs
+    val shutterLocked: StateFlow<Boolean> = streamStateHolder.shutterLocked
+    val zoomLocked: StateFlow<Boolean> = streamStateHolder.zoomLocked
+    val gridEnabled: StateFlow<Boolean> = streamStateHolder.gridEnabled
     val useAvc: StateFlow<Boolean> = streamStateHolder.useAvc
 
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
@@ -65,6 +73,38 @@ class CameraControlViewModel @Inject constructor(
 
     fun setWhiteBalance(awbMode: Int) {
         streamStateHolder.setWhiteBalance(awbMode)
+    }
+
+    fun setWhiteBalanceLocked(locked: Boolean) {
+        streamStateHolder.setWhiteBalanceLocked(locked)
+    }
+
+    fun setAutoExposure(enabled: Boolean) {
+        streamStateHolder.setAutoExposure(enabled)
+    }
+
+    fun setIso(value: Int) {
+        streamStateHolder.setIso(value)
+    }
+
+    fun setIsoLocked(locked: Boolean) {
+        streamStateHolder.setIsoLocked(locked)
+    }
+
+    fun setShutterSpeedNs(value: Long) {
+        streamStateHolder.setShutterSpeedNs(value)
+    }
+
+    fun setShutterLocked(locked: Boolean) {
+        streamStateHolder.setShutterLocked(locked)
+    }
+
+    fun setZoomLocked(locked: Boolean) {
+        streamStateHolder.setZoomLocked(locked)
+    }
+
+    fun setGridEnabled(enabled: Boolean) {
+        streamStateHolder.setGridEnabled(enabled)
     }
 
     fun tapToFocus(meteringAction: androidx.camera.core.FocusMeteringAction) {

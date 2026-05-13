@@ -70,8 +70,29 @@ class StreamStateHolder @Inject constructor() {
     private val _whiteBalance = MutableStateFlow(1)
     val whiteBalance: StateFlow<Int> = _whiteBalance.asStateFlow()
 
+    private val _whiteBalanceLocked = MutableStateFlow(false)
+    val whiteBalanceLocked: StateFlow<Boolean> = _whiteBalanceLocked.asStateFlow()
+
     private val _autoExposure = MutableStateFlow(true)
     val autoExposure: StateFlow<Boolean> = _autoExposure.asStateFlow()
+
+    private val _iso = MutableStateFlow(0)
+    val iso: StateFlow<Int> = _iso.asStateFlow()
+
+    private val _isoLocked = MutableStateFlow(false)
+    val isoLocked: StateFlow<Boolean> = _isoLocked.asStateFlow()
+
+    private val _shutterSpeedNs = MutableStateFlow(0L)
+    val shutterSpeedNs: StateFlow<Long> = _shutterSpeedNs.asStateFlow()
+
+    private val _shutterLocked = MutableStateFlow(false)
+    val shutterLocked: StateFlow<Boolean> = _shutterLocked.asStateFlow()
+
+    private val _zoomLocked = MutableStateFlow(false)
+    val zoomLocked: StateFlow<Boolean> = _zoomLocked.asStateFlow()
+
+    private val _gridEnabled = MutableStateFlow(false)
+    val gridEnabled: StateFlow<Boolean> = _gridEnabled.asStateFlow()
 
     // Setters
     fun setStreaming(value: Boolean) { _isStreaming.value = value }
@@ -92,5 +113,12 @@ class StreamStateHolder @Inject constructor() {
     fun setFocus(value: Int) { _focus.value = value.coerceIn(0, 100) }
     fun setZoom(value: Float) { _zoom.value = value.coerceIn(0f, 1f) }
     fun setWhiteBalance(value: Int) { _whiteBalance.value = value }
+    fun setWhiteBalanceLocked(value: Boolean) { _whiteBalanceLocked.value = value }
     fun setAutoExposure(value: Boolean) { _autoExposure.value = value }
+    fun setIso(value: Int) { _iso.value = value.coerceAtLeast(0) }
+    fun setIsoLocked(value: Boolean) { _isoLocked.value = value }
+    fun setShutterSpeedNs(value: Long) { _shutterSpeedNs.value = value.coerceAtLeast(0L) }
+    fun setShutterLocked(value: Boolean) { _shutterLocked.value = value }
+    fun setZoomLocked(value: Boolean) { _zoomLocked.value = value }
+    fun setGridEnabled(value: Boolean) { _gridEnabled.value = value }
 }

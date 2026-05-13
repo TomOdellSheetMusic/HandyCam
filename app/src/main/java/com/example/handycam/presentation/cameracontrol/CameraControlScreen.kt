@@ -5,12 +5,16 @@ import androidx.camera.view.PreviewView
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.border
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FlashOff
@@ -41,6 +45,15 @@ fun CameraControlScreen(
     val torchEnabled by viewModel.torchEnabled.collectAsState()
     val exposure by viewModel.exposure.collectAsState()
     val zoom by viewModel.zoom.collectAsState()
+    val autoExposure by viewModel.autoExposure.collectAsState()
+    val whiteBalance by viewModel.whiteBalance.collectAsState()
+    val whiteBalanceLocked by viewModel.whiteBalanceLocked.collectAsState()
+    val iso by viewModel.iso.collectAsState()
+    val isoLocked by viewModel.isoLocked.collectAsState()
+    val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
+    val shutterLocked by viewModel.shutterLocked.collectAsState()
+    val zoomLocked by viewModel.zoomLocked.collectAsState()
+    val gridEnabled by viewModel.gridEnabled.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
     val useAvc by viewModel.useAvc.collectAsState()
 
@@ -56,6 +69,26 @@ fun CameraControlScreen(
     var dragStartY by remember { mutableFloatStateOf(0f) }
     var dragStartExposure by remember { mutableIntStateOf(0) }
     var isDragging by remember { mutableStateOf(false) }
+    var whiteBalanceMenuOpen by remember { mutableStateOf(false) }
+
+    val whiteBalanceModes = remember {
+        listOf(
+            1 to "Auto",
+            2 to "Incandescent",
+            3 to "Fluorescent",
+            4 to "Warm fluorescent",
+            5 to "Daylight",
+            6 to "Cloudy daylight",
+            7 to "Twilight",
+            8 to "Shade",
+        )
+    }
+
+    fun shutterLabel(valueNs: Long): String {
+        if (valueNs <= 0L) return "Auto"
+        val seconds = valueNs / 1_000_000_000.0
+        return if (seconds >= 1.0) "${"%.1f".format(seconds)}s" else "1/${(1.0 / seconds).roundToInt().coerceAtLeast(1)}"
+    }
 
     // EV and focus ring auto-hide
     LaunchedEffect(showEvLabel) { if (showEvLabel) { delay(1500); showEvLabel = false } }
@@ -109,6 +142,27 @@ fun CameraControlScreen(
             )
         }
 
+        if (gridEnabled) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val thirdWidth = size.width / 3f
+                val thirdHeight = size.height / 3f
+                for (i in 1..2) {
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.38f),
+                        start = Offset(thirdWidth * i, 0f),
+                        end = Offset(thirdWidth * i, size.height),
+                        strokeWidth = 1.5f
+                    )
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.38f),
+                        start = Offset(0f, thirdHeight * i),
+                        end = Offset(size.width, thirdHeight * i),
+                        strokeWidth = 1.5f
+                    )
+                }
+            }
+        }
+
         // ── Gesture layer (tap-to-focus, drag-to-EV, pinch-to-zoom) ──
         Box(
             modifier = Modifier
@@ -123,16 +177,18 @@ fun CameraControlScreen(
 
                             if (pointers.size == 2) {
                                 // Pinch gesture
-                                val p0 = pointers[0].position
-                                val p1 = pointers[1].position
-                                val span = (p0 - p1).getDistance()
-                                if (lastSpan > 0f) {
-                                    val scaleFactor = span / lastSpan
-                                    val newZoom = (viewModel.zoom.value + (scaleFactor - 1f) * 0.5f).coerceIn(0f, 1f)
-                                    viewModel.setZoom(newZoom)
+                                if (!zoomLocked) {
+                                    val p0 = pointers[0].position
+                                    val p1 = pointers[1].position
+                                    val span = (p0 - p1).getDistance()
+                                    if (lastSpan > 0f) {
+                                        val scaleFactor = span / lastSpan
+                                        val newZoom = (viewModel.zoom.value + (scaleFactor - 1f) * 0.5f).coerceIn(0f, 1f)
+                                        viewModel.setZoom(newZoom)
+                                    }
+                                    lastSpan = span
+                                    pointers.forEach { it.consume() }
                                 }
-                                lastSpan = span
-                                pointers.forEach { it.consume() }
                             } else {
                                 lastSpan = 0f
                                 val change = event.changes.firstOrNull() ?: continue
@@ -145,7 +201,7 @@ fun CameraControlScreen(
                                     }
                                     change.pressed && change.previousPressed -> {
                                         val dy = dragStartY - change.position.y
-                                        if (kotlin.math.abs(dy) > 40) {
+                                        if (autoExposure && kotlin.math.abs(dy) > 40) {
                                             isDragging = true
                                             val range = viewModel.cameraStateHolder.cameraInfo
                                                 ?.exposureState?.exposureCompensationRange
@@ -267,7 +323,7 @@ fun CameraControlScreen(
 
         // ── EV label ──────────────────────────────────────────────────
         AnimatedVisibility(
-            visible = showEvLabel,
+                visible = showEvLabel && autoExposure,
             enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -286,42 +342,143 @@ fun CameraControlScreen(
             }
         }
 
-        // ── Hint: drag to adjust exposure ────────────────────────────
-        if (!showEvLabel && !isDragging) {
-            Text(
-                "↕ drag for exposure · tap to focus · pinch to zoom",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0x99FFFFFF),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 72.dp)
-            )
-        }
-
-        // ── Zoom bar ──────────────────────────────────────────────────
-        Row(
+        // ── Pro controls panel ───────────────────────────────────────
+        Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(top = 8.dp),
+            color = Color(0xC0181B22),
+            tonalElevation = 6.dp,
+            shadowElevation = 6.dp,
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
         ) {
-            val minZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.minZoomRatio ?: 1f
-            val maxZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8f
-            val zoomRatio = minZoom + (maxZoom - minZoom) * zoom
-            Text(
-                "%.1fx".format(zoomRatio),
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.width(40.dp)
-            )
-            Slider(
-                value = zoom,
-                onValueChange = { viewModel.setZoom(it) },
-                modifier = Modifier.weight(1f),
-                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = if (useAvc) "Pro controls" else "Basic controls",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Text(
+                    text = if (useAvc) "AVC mode enables Camera2 manual controls. On some cameras, ISO and shutter stay in auto if manual sensor mode is unsupported." else "CameraX mode only supports torch, zoom, tap-to-focus, and exposure compensation in this screen.",
+                    color = Color(0xB3FFFFFF),
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = autoExposure, onClick = { viewModel.setAutoExposure(!autoExposure) }, label = { Text(if (autoExposure) "Exposure auto" else "Exposure manual") })
+                    FilterChip(selected = whiteBalanceLocked, onClick = { viewModel.setWhiteBalanceLocked(!whiteBalanceLocked) }, label = { Text(if (whiteBalanceLocked) "WB locked" else "WB lock") })
+                    FilterChip(selected = isoLocked, onClick = { viewModel.setIsoLocked(!isoLocked) }, label = { Text(if (isoLocked) "ISO locked" else "ISO lock") })
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = shutterLocked, onClick = { viewModel.setShutterLocked(!shutterLocked) }, label = { Text(if (shutterLocked) "Shutter locked" else "Shutter lock") })
+                    FilterChip(selected = zoomLocked, onClick = { viewModel.setZoomLocked(!zoomLocked) }, label = { Text(if (zoomLocked) "Zoom locked" else "Zoom lock") })
+                    FilterChip(selected = gridEnabled, onClick = { viewModel.setGridEnabled(!gridEnabled) }, label = { Text(if (gridEnabled) "Grid on" else "Grid") })
+                }
+
+                if (autoExposure) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Exposure compensation", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = if (exposure >= 0) "EV +$exposure" else "EV $exposure",
+                            color = Color(0xB3FFFFFF),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Slider(
+                            value = exposure.toFloat(),
+                            onValueChange = { viewModel.setExposure(it.roundToInt()) },
+                            valueRange = -12f..12f,
+                            enabled = useAvc,
+                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
+                        )
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("White balance", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        ExposedDropdownMenuBox(expanded = whiteBalanceMenuOpen, onExpandedChange = { whiteBalanceMenuOpen = it }) {
+                            OutlinedTextField(
+                                value = whiteBalanceModes.firstOrNull { it.first == whiteBalance }?.second ?: whiteBalance.toString(),
+                                onValueChange = {},
+                                readOnly = true,
+                                enabled = useAvc,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable, true),
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = whiteBalanceMenuOpen) }
+                            )
+                            ExposedDropdownMenu(expanded = whiteBalanceMenuOpen, onDismissRequest = { whiteBalanceMenuOpen = false }) {
+                                whiteBalanceModes.forEach { (mode, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            viewModel.setWhiteBalance(mode)
+                                            whiteBalanceMenuOpen = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Zoom", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        val minZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.minZoomRatio ?: 1f
+                        val maxZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8f
+                        val zoomRatio = minZoom + (maxZoom - minZoom) * zoom
+                        Text("%.1fx".format(zoomRatio), color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelSmall)
+                        Slider(
+                            value = zoom,
+                            onValueChange = { if (!zoomLocked) viewModel.setZoom(it) },
+                            enabled = useAvc && !zoomLocked,
+                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
+                        )
+                    }
+                }
+
+                if (!autoExposure) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("ISO", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text(if (iso > 0) iso.toString() else "Auto", color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelSmall)
+                        Slider(
+                            value = maxOf(iso, 100).toFloat(),
+                            onValueChange = { viewModel.setIso(it.roundToInt()) },
+                            valueRange = 100f..3200f,
+                            steps = 30,
+                            enabled = useAvc && isoLocked,
+                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Shutter", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text(shutterLabel(shutterSpeedNs), color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelSmall)
+                        Slider(
+                            value = maxOf(shutterSpeedNs, 250_000L).toFloat(),
+                            onValueChange = { viewModel.setShutterSpeedNs(it.toLong()) },
+                            valueRange = 250_000f..66_000_000f,
+                            enabled = useAvc && shutterLocked,
+                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
+                        )
+                    }
+                }
+
+                Text(
+                    text = if (autoExposure) "Tip: drag on the preview for EV, tap to focus, pinch to zoom." else "Tip: manual exposure uses ISO and shutter sliders.",
+                    color = Color(0x99FFFFFF),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 

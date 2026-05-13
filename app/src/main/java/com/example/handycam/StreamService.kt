@@ -160,6 +160,11 @@ class StreamService : LifecycleService() {
             }
         }
         lifecycleScope.launch {
+            streamStateHolder.autoExposure.collect { enabled ->
+                try { applyAutoExposure(enabled) } catch (e: Exception) { Log.e(TAG, "applyAutoExposure error", e) }
+            }
+        }
+        lifecycleScope.launch {
             streamStateHolder.focus.collect { v ->
                 try { applyFocus(v) } catch (e: Exception) { Log.e(TAG, "applyFocus error", e) }
             }
@@ -177,6 +182,21 @@ class StreamService : LifecycleService() {
         lifecycleScope.launch {
             streamStateHolder.whiteBalance.collect { v ->
                 try { applyWhiteBalance(v) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalance error", e) }
+            }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.whiteBalanceLocked.collect { locked ->
+                try { applyWhiteBalanceLock(locked) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalanceLock error", e) }
+            }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.iso.collect { iso ->
+                try { applyIso(iso) } catch (e: Exception) { Log.e(TAG, "applyIso error", e) }
+            }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.shutterSpeedNs.collect { shutterNs ->
+                try { applyShutterSpeed(shutterNs) } catch (e: Exception) { Log.e(TAG, "applyShutterSpeed error", e) }
             }
         }
     }
@@ -357,25 +377,56 @@ class StreamService : LifecycleService() {
      * and re-applies all current control state from [streamStateHolder].
      * Must be called on the [cameraHandler] thread.
      */
-    private fun buildCamera2Request(cam: CameraDevice): CaptureRequest? {
+    private fun buildCamera2Request(cam: CameraDevice, focusDistanceOverride: Float? = null): CaptureRequest? {
         if (sessionSurfaces.isEmpty()) return null
         return try {
             val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             sessionSurfaces.forEach { b.addTarget(it) }
             b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-            b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            val chars = try { cameraManager?.getCameraCharacteristics(cam.id) } catch (_: Exception) { null }
+            val supportsManualSensor = chars
+                ?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                ?.any { it == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR } == true
+
+            if (focusDistanceOverride != null) {
+                try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
+                try { b.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistanceOverride) } catch (_: Exception) {}
+            } else {
+                try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) } catch (_: Exception) {}
+            }
+
+            try {
+                b.set(CaptureRequest.CONTROL_AWB_MODE, streamStateHolder.whiteBalance.value)
+                b.set(CaptureRequest.CONTROL_AWB_LOCK, streamStateHolder.whiteBalanceLocked.value)
+            } catch (_: Exception) {}
+
+            val manualExposure = !streamStateHolder.autoExposure.value && supportsManualSensor
+            if (manualExposure) {
+                try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF) } catch (_: Exception) {}
+                val isoRange = chars?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                val shutterRange = chars?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                val isoValue = (streamStateHolder.iso.value.takeIf { it > 0 } ?: isoRange?.lower ?: 100).coerceAtLeast(1)
+                val shutterNs = (streamStateHolder.shutterSpeedNs.value.takeIf { it > 0L } ?: shutterRange?.lower ?: 10_000_000L).coerceAtLeast(1L)
+                try { b.set(CaptureRequest.SENSOR_SENSITIVITY, if (isoRange != null) isoValue.coerceIn(isoRange.lower, isoRange.upper) else isoValue) } catch (_: Exception) {}
+                try { b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, if (shutterRange != null) shutterNs.coerceIn(shutterRange.lower, shutterRange.upper) else shutterNs) } catch (_: Exception) {}
+            } else {
+                if (!supportsManualSensor && !streamStateHolder.autoExposure.value) {
+                    Log.w(TAG, "Manual sensor controls not supported on camera ${cam.id}; keeping AE on to avoid black preview")
+                }
+                try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (_: Exception) {}
+                try { b.set(CaptureRequest.CONTROL_AE_LOCK, false) } catch (_: Exception) {}
+                val ev = streamStateHolder.exposure.value
+                try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
+            }
+
             // Flash / torch
             val flashMode = if (streamStateHolder.torchEnabled.value)
                 CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             try { b.set(CaptureRequest.FLASH_MODE, flashMode) } catch (_: Exception) {}
-            // Exposure compensation
-            val ev = streamStateHolder.exposure.value
-            try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
             // Zoom
             val zoom = streamStateHolder.zoom.value
             if (zoom > 0f) {
                 try {
-                    val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
                     val maxZoom = chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
                     val zoomRatio = 1f + zoom * (maxZoom - 1f)
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -449,6 +500,18 @@ class StreamService : LifecycleService() {
         }
     }
 
+    private fun applyAutoExposure(enabled: Boolean) {
+        try {
+            if (!useAvc) {
+                Log.i(TAG, "AutoExposure requested for CameraX: $enabled (no-op without Camera2 interop)")
+            } else {
+                updateCamera2Request()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyAutoExposure error", e)
+        }
+    }
+
     // Apply manual focus (best-effort: Camera2 LENS_FOCUS_DISTANCE)
     private fun applyFocus(value: Int) {
         try {
@@ -459,16 +522,10 @@ class StreamService : LifecycleService() {
                 cameraHandler?.post {
                     val cam = cameraDevice ?: return@post
                     val session = captureSession ?: return@post
-                    val req = buildCamera2Request(cam) ?: return@post
-                    // Re-build with manual focus override — use a fresh builder from the same surfaces
                     try {
-                        val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        sessionSurfaces.forEach { b.addTarget(it) }
-                        b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
-                        b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                        b.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd)
-                        session.setRepeatingRequest(b.build(), null, cameraHandler)
+                        val req = buildCamera2Request(cam, fd) ?: return@post
+                        session.setRepeatingRequest(req, null, cameraHandler)
                         Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to apply focus on Camera2", e)
@@ -514,6 +571,42 @@ class StreamService : LifecycleService() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "applyWhiteBalance error", e)
+        }
+    }
+
+    private fun applyWhiteBalanceLock(locked: Boolean) {
+        try {
+            if (!useAvc) {
+                Log.i(TAG, "White balance lock requested for CameraX: $locked (no-op without Camera2 interop)")
+            } else {
+                updateCamera2Request()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyWhiteBalanceLock error", e)
+        }
+    }
+
+    private fun applyIso(value: Int) {
+        try {
+            if (!useAvc) {
+                Log.i(TAG, "ISO requested for CameraX: $value (no-op without Camera2 interop)")
+            } else {
+                updateCamera2Request()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyIso error", e)
+        }
+    }
+
+    private fun applyShutterSpeed(value: Long) {
+        try {
+            if (!useAvc) {
+                Log.i(TAG, "Shutter requested for CameraX: $value (no-op without Camera2 interop)")
+            } else {
+                updateCamera2Request()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "applyShutterSpeed error", e)
         }
     }
 
