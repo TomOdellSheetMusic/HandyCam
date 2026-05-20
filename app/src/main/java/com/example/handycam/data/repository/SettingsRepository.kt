@@ -21,7 +21,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun updateHost(host: String) = preferencesManager.updateHost(host)
     
-    suspend fun updatePort(port: Int) = preferencesManager.updatePort(port)
+    suspend fun updateStreamingPort(port: Int) = preferencesManager.updateStreamingPort(port)
     
     suspend fun updateCamera(camera: String) = preferencesManager.updateCamera(camera)
     

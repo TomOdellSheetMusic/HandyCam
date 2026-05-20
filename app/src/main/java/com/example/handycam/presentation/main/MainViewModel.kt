@@ -67,7 +67,7 @@ class MainViewModel @Inject constructor(
             val intent = Intent(context, StreamService::class.java).apply {
                 action = "com.example.handycam.ACTION_START"
                 putExtra("host", host)
-                putExtra("port", port)
+                putExtra("streamingPort", port)
                 putExtra("width", width)
                 putExtra("height", height)
                 putExtra("camera", camera)
@@ -97,7 +97,7 @@ class MainViewModel @Inject constructor(
     fun startHttpsServer(port: Int) {
         val intent = Intent(context, KtorHttpsServerService::class.java).apply {
             action = "com.example.handycam.ACTION_START_HTTPS_SERVER"
-            putExtra("port", port)
+            putExtra("httpPort", port)
         }
         context.startForegroundService(intent)
     }

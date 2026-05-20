@@ -186,7 +186,7 @@ class StreamService : LifecycleService() {
         when (intent?.action) {
             ACTION_START -> {
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
-                val port = intent.getIntExtra("port", 4747)
+                val streamingPort = intent.getIntExtra("streamingPort", 4747)
                 val width = intent.getIntExtra("width", 1080)
                 val height = intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
@@ -207,7 +207,7 @@ class StreamService : LifecycleService() {
                 // Update state holder
                 streamStateHolder.setStreaming(true)
                 streamStateHolder.setCamera(selectedCamera)
-                streamStateHolder.setPort(port)
+                streamStateHolder.setStreamingPort(streamingPort)
                 streamStateHolder.setWidth(width)
                 streamStateHolder.setHeight(height)
                 streamStateHolder.setJpegQuality(jpegQuality)
@@ -219,14 +219,14 @@ class StreamService : LifecycleService() {
                 // Save streaming state to preferences
                 getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
                     .edit()
-                    .putInt("streamPort", port)
+                    .putInt("streamPort", streamingPort)
                     .putString("camera", selectedCamera)
                     .apply()
                 
                 val notifText = if (useScreenCapture)
-                    "Streaming screen on $port — fps=$targetFps"
+                    "Streaming screen on $streamingPort — fps=$targetFps"
                 else
-                    "Streaming on $port — $selectedCamera — q=$jpegQuality fps=$targetFps"
+                    "Streaming on $streamingPort — $selectedCamera — q=$jpegQuality fps=$targetFps"
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         val videoType = if (useScreenCapture)
@@ -247,9 +247,9 @@ class StreamService : LifecycleService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, port, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
+                startStreaming(host, streamingPort, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
                     useScreenCapture, mpResultCode, mpData)
-                registerMdns(port)
+                registerMdns(streamingPort)
                 // notify UI and persist state that streaming started
                 try {
                     notifyStreamingState(true)

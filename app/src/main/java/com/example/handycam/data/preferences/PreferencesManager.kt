@@ -25,7 +25,8 @@ class PreferencesManager(private val context: Context) {
     // Preference keys
     private object PreferenceKeys {
         val HOST = stringPreferencesKey("host")
-        val PORT = intPreferencesKey("port")
+        val STREAMING_PORT = intPreferencesKey("streaming_port")
+        val HTTP_PORT = intPreferencesKey("http_port")
         val WIDTH = intPreferencesKey("width")
         val HEIGHT = intPreferencesKey("height")
         val CAMERA = stringPreferencesKey("camera")
@@ -51,7 +52,7 @@ class PreferencesManager(private val context: Context) {
         .map { preferences ->
             AppSettings(
                 host = preferences[PreferenceKeys.HOST] ?: "0.0.0.0",
-                port = preferences[PreferenceKeys.PORT] ?: 4747,
+                streamingPort = preferences[PreferenceKeys.STREAMING_PORT] ?: 4747,
                 camera = preferences[PreferenceKeys.CAMERA] ?: "back",
                 isStreaming = preferences[PreferenceKeys.IS_STREAMING] ?: false
             )
@@ -85,9 +86,9 @@ class PreferencesManager(private val context: Context) {
         }
     }
 
-    suspend fun updatePort(port: Int) {
+    suspend fun updateStreamingPort(port: Int) {
         dataStore.edit { preferences ->
-            preferences[PreferenceKeys.PORT] = port
+            preferences[PreferenceKeys.STREAMING_PORT] = port
         }
     }
 

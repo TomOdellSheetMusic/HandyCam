@@ -6,7 +6,7 @@ package com.example.handycam.data.model
  */
 data class AppSettings(
     val host: String = "0.0.0.0",
-    val port: Int = 4747,
+    val streamingPort: Int = 4747,
     val camera: String = "back",
     val isStreaming: Boolean = false
 )
