@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.graphics.ImageFormat
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.Build
@@ -45,6 +46,7 @@ import android.os.HandlerThread
 import android.view.Surface
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.params.MeteringRectangle
 import android.graphics.SurfaceTexture
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -63,6 +65,7 @@ private const val ACTION_START = "com.example.handycam.ACTION_START"
 private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
 private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+private const val ACTION_SET_FOCUS_POINT = "com.example.handycam.ACTION_SET_FOCUS_POINT"
 
 @dagger.hilt.android.AndroidEntryPoint
 class StreamService : LifecycleService() {
@@ -108,6 +111,8 @@ class StreamService : LifecycleService() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var analysisUseCase: ImageAnalysis? = null
     private var cameraExecutor: java.util.concurrent.ExecutorService? = null
+    @Volatile
+    private var pendingFocusPoint: PointF? = null
     
     // Screen capture fields
     private var useScreenCapture: Boolean = false
@@ -295,6 +300,15 @@ class StreamService : LifecycleService() {
                 Log.i(TAG, "Received preview surface update: $surfaceToken")
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
+            ACTION_SET_FOCUS_POINT -> {
+                val x = intent.getFloatExtra("x", 0.5f).coerceIn(0f, 1f)
+                val y = intent.getFloatExtra("y", 0.5f).coerceIn(0f, 1f)
+                Log.i(TAG, "Received focus point update: $x,$y")
+                if (useAvc) {
+                    pendingFocusPoint = PointF(x, y)
+                    triggerCamera2FocusMetering(x, y)
+                }
+            }
             ACTION_STOP -> {
                 streamStateHolder.setStreaming(false)
                 unregisterMdns()
@@ -387,12 +401,20 @@ class StreamService : LifecycleService() {
             val supportsManualSensor = chars
                 ?.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                 ?.any { it == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR } == true
+            val focusPoint = pendingFocusPoint
+            val sensorRect = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val maxAfRegions = chars?.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
 
             if (focusDistanceOverride != null) {
                 try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
                 try { b.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistanceOverride) } catch (_: Exception) {}
-            } else {
+            } else if (focusPoint != null && sensorRect != null && maxAfRegions > 0) {
+                try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO) } catch (_: Exception) {}
+                try { b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(MeteringRectangle(buildFocusRect(sensorRect, focusPoint.x, focusPoint.y), MeteringRectangle.METERING_WEIGHT_MAX))) } catch (_: Exception) {}
+            } else if (streamStateHolder.autoFocus.value) {
                 try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) } catch (_: Exception) {}
+            } else {
+                try { b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF) } catch (_: Exception) {}
             }
 
             try {
@@ -400,24 +422,10 @@ class StreamService : LifecycleService() {
                 b.set(CaptureRequest.CONTROL_AWB_LOCK, streamStateHolder.whiteBalanceLocked.value)
             } catch (_: Exception) {}
 
-            val manualExposure = !streamStateHolder.autoExposure.value && supportsManualSensor
-            if (manualExposure) {
-                try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF) } catch (_: Exception) {}
-                val isoRange = chars?.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-                val shutterRange = chars?.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-                val isoValue = (streamStateHolder.iso.value.takeIf { it > 0 } ?: isoRange?.lower ?: 100).coerceAtLeast(1)
-                val shutterNs = (streamStateHolder.shutterSpeedNs.value.takeIf { it > 0L } ?: shutterRange?.lower ?: 10_000_000L).coerceAtLeast(1L)
-                try { b.set(CaptureRequest.SENSOR_SENSITIVITY, if (isoRange != null) isoValue.coerceIn(isoRange.lower, isoRange.upper) else isoValue) } catch (_: Exception) {}
-                try { b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, if (shutterRange != null) shutterNs.coerceIn(shutterRange.lower, shutterRange.upper) else shutterNs) } catch (_: Exception) {}
-            } else {
-                if (!supportsManualSensor && !streamStateHolder.autoExposure.value) {
-                    Log.w(TAG, "Manual sensor controls not supported on camera ${cam.id}; keeping AE on to avoid black preview")
-                }
-                try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (_: Exception) {}
-                try { b.set(CaptureRequest.CONTROL_AE_LOCK, false) } catch (_: Exception) {}
-                val ev = streamStateHolder.exposure.value
-                try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
-            }
+            try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (_: Exception) {}
+            try { b.set(CaptureRequest.CONTROL_AE_LOCK, !streamStateHolder.autoExposure.value) } catch (_: Exception) {}
+            val ev = streamStateHolder.exposure.value
+            try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
 
             // Flash / torch
             val flashMode = if (streamStateHolder.torchEnabled.value)
@@ -462,6 +470,50 @@ class StreamService : LifecycleService() {
                 Log.e(TAG, "setRepeatingRequest failed", e)
             }
         }
+    }
+
+    private fun triggerCamera2FocusMetering(normalizedX: Float, normalizedY: Float) {
+        cameraHandler?.post {
+            val cam = cameraDevice ?: return@post
+            val session = captureSession ?: return@post
+            val chars = cameraManager?.getCameraCharacteristics(cam.id) ?: return@post
+            val sensorRect = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return@post
+            val maxAfRegions = chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0
+            if (maxAfRegions <= 0) {
+                Log.i(TAG, "Camera ${cam.id} does not support AF regions")
+                return@post
+            }
+
+            try {
+                pendingFocusPoint = PointF(normalizedX, normalizedY)
+                val reqBuilder = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                sessionSurfaces.forEach { reqBuilder.addTarget(it) }
+                reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                reqBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                reqBuilder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(MeteringRectangle(buildFocusRect(sensorRect, normalizedX, normalizedY), MeteringRectangle.METERING_WEIGHT_MAX)))
+                reqBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+
+                session.capture(reqBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                        pendingFocusPoint = null
+                        updateCamera2Request()
+                    }
+                }, cameraHandler)
+            } catch (e: Exception) {
+                Log.e(TAG, "triggerCamera2FocusMetering failed", e)
+            }
+        }
+    }
+
+    private fun buildFocusRect(sensorRect: Rect, normalizedX: Float, normalizedY: Float): Rect {
+        val centerX = (sensorRect.left + sensorRect.width() * normalizedX).toInt()
+        val centerY = (sensorRect.top + sensorRect.height() * normalizedY).toInt()
+        val halfSize = (minOf(sensorRect.width(), sensorRect.height()) * 0.08f).toInt().coerceAtLeast(40)
+        val left = (centerX - halfSize).coerceIn(sensorRect.left, sensorRect.right - 1)
+        val top = (centerY - halfSize).coerceIn(sensorRect.top, sensorRect.bottom - 1)
+        val right = (centerX + halfSize).coerceIn(left + 1, sensorRect.right)
+        val bottom = (centerY + halfSize).coerceIn(top + 1, sensorRect.bottom)
+        return Rect(left, top, right, bottom)
     }
 
     // Apply torch state to camera (CameraX or Camera2)
@@ -643,22 +695,19 @@ class StreamService : LifecycleService() {
     private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean, screenCapture: Boolean = false, mpResultCode: Int = 0, mpData: Intent? = null) {
         if (running) return
         running = true
-        // Always stream in landscape — swap if portrait dimensions were passed
-        val w = maxOf(width, height)
-        val h = minOf(width, height)
         // store runtime options
         selectedCamera = camera
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
         useScreenCapture = screenCapture
-        requestedWidth = w
-        requestedHeight = h
+        requestedWidth = width
+        requestedHeight = height
 
         if (useScreenCapture) {
             if (useAvc) {
                 try {
-                    setupEncoder(w, h, targetFps)
+                    setupEncoder(width, height, targetFps)
                     startEncoderOutputReader()
                     startScreenCaptureAvc(mpResultCode, mpData!!)
                 } catch (e: Exception) {
@@ -666,7 +715,7 @@ class StreamService : LifecycleService() {
                 }
             } else {
                 try {
-                    startScreenCaptureMjpeg(mpResultCode, mpData!!, w, h)
+                    startScreenCaptureMjpeg(mpResultCode, mpData!!, width, height)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start screen capture MJPEG pipeline", e)
                 }
@@ -675,7 +724,7 @@ class StreamService : LifecycleService() {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
             // camera output size and call setupEncoder(...) with a compatible size.
             try {
-                startCamera2ToEncoder(w, h, targetFps)
+                startCamera2ToEncoder(height, width, targetFps)
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
@@ -708,7 +757,7 @@ class StreamService : LifecycleService() {
                     // cause CameraX to pick an unexpected fallback (sometimes square).
                     // setTargetResolution requests the desired Size directly which keeps
                     // aspect ratio and avoids selecting strange square fallbacks.
-                    .setTargetResolution(android.util.Size(w, h))
+                    .setTargetResolution(android.util.Size(width, height))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
@@ -1477,27 +1526,31 @@ class StreamService : LifecycleService() {
         try {
             val chars = cameraManager?.getCameraCharacteristics(camId)
             // Camera2 output sizes are always in sensor (landscape) orientation.
-            // Swap the requested dimensions so we find the right match.
             val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             val swapDimensions = sensorOrientation == 90 || sensorOrientation == 270
-            val nativeReqWidth  = if (swapDimensions && reqWidth < reqHeight) reqHeight else reqWidth
-            val nativeReqHeight = if (swapDimensions && reqWidth < reqHeight) reqWidth  else reqHeight
+            val nativeReqWidth = if (swapDimensions) reqHeight else reqWidth
+            val nativeReqHeight = if (swapDimensions) reqWidth else reqHeight
+            val desiredAspect = nativeReqWidth.toFloat() / nativeReqHeight.toFloat().coerceAtLeast(1f)
             val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest by area preserving aspect ratio
+                    // find exact match or choose closest aspect ratio first, then area
                     var chosen = sizes[0]
-                    var bestDiff = Math.abs(chosen.width * chosen.height - nativeReqWidth * nativeReqHeight)
+                    var bestAspectDiff = kotlin.math.abs((chosen.width.toFloat() / chosen.height.toFloat().coerceAtLeast(1f)) - desiredAspect)
+                    var bestAreaDiff = Math.abs(chosen.width * chosen.height - nativeReqWidth * nativeReqHeight)
                     for (s in sizes) {
                         if (s.width == nativeReqWidth && s.height == nativeReqHeight) {
                             chosen = s
-                            bestDiff = 0
+                            bestAspectDiff = 0f
+                            bestAreaDiff = 0
                             break
                         }
-                        val diff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                        if (diff < bestDiff) {
-                            bestDiff = diff
+                        val aspectDiff = kotlin.math.abs((s.width.toFloat() / s.height.toFloat().coerceAtLeast(1f)) - desiredAspect)
+                        val areaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
+                        if (aspectDiff < bestAspectDiff || (aspectDiff == bestAspectDiff && areaDiff < bestAreaDiff)) {
+                            bestAspectDiff = aspectDiff
+                            bestAreaDiff = areaDiff
                             chosen = s
                         }
                     }
@@ -1574,12 +1627,8 @@ class StreamService : LifecycleService() {
                                 captureSession = session
                                 sessionSurfaces = targets.toList() // snapshot for safe request rebuilding
                                 try {
-                                    val reqBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                                    targets.forEach { reqBuilder.addTarget(it) }
-                                    reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                                    reqBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                                    
-                                    session.setRepeatingRequest(reqBuilder.build(), null, cameraHandler)
+                                    val req = buildCamera2Request(camera) ?: return
+                                    session.setRepeatingRequest(req, null, cameraHandler)
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
                                     
                                     // Notify that camera is ready
@@ -1890,12 +1939,8 @@ class StreamService : LifecycleService() {
                     captureSession = newSession
                     sessionSurfaces = surfaces.toList()
                     try {
-                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        surfaces.forEach { builder.addTarget(it) }
-                        builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                        builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                        
-                        newSession.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        val req = buildCamera2Request(camera) ?: return
+                        newSession.setRepeatingRequest(req, null, cameraHandler)
                         Log.i(TAG, "Camera2 session reconfigured with ${surfaces.size} surfaces")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start repeating request after reconfigure", e)

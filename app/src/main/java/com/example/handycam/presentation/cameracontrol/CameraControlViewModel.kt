@@ -29,6 +29,7 @@ class CameraControlViewModel @Inject constructor(
     val zoom: StateFlow<Float> = streamStateHolder.zoom
     val whiteBalance: StateFlow<Int> = streamStateHolder.whiteBalance
     val whiteBalanceLocked: StateFlow<Boolean> = streamStateHolder.whiteBalanceLocked
+    val autoFocus: StateFlow<Boolean> = streamStateHolder.autoFocus
     val autoExposure: StateFlow<Boolean> = streamStateHolder.autoExposure
     val iso: StateFlow<Int> = streamStateHolder.iso
     val isoLocked: StateFlow<Boolean> = streamStateHolder.isoLocked
@@ -66,12 +67,14 @@ class CameraControlViewModel @Inject constructor(
     }
 
     fun setZoom(linearZoom: Float) {
+        if (streamStateHolder.zoomLocked.value) return
         val clamped = linearZoom.coerceIn(0f, 1f)
         streamStateHolder.setZoom(clamped)
         try { cameraStateHolder.cameraControl?.setLinearZoom(clamped) } catch (_: Exception) {}
     }
 
     fun setWhiteBalance(awbMode: Int) {
+        if (streamStateHolder.whiteBalanceLocked.value) return
         streamStateHolder.setWhiteBalance(awbMode)
     }
 
@@ -79,11 +82,16 @@ class CameraControlViewModel @Inject constructor(
         streamStateHolder.setWhiteBalanceLocked(locked)
     }
 
+    fun setAutoFocus(enabled: Boolean) {
+        streamStateHolder.setAutoFocus(enabled)
+    }
+
     fun setAutoExposure(enabled: Boolean) {
         streamStateHolder.setAutoExposure(enabled)
     }
 
     fun setIso(value: Int) {
+        if (streamStateHolder.isoLocked.value) return
         streamStateHolder.setIso(value)
     }
 
@@ -92,6 +100,7 @@ class CameraControlViewModel @Inject constructor(
     }
 
     fun setShutterSpeedNs(value: Long) {
+        if (streamStateHolder.shutterLocked.value) return
         streamStateHolder.setShutterSpeedNs(value)
     }
 
@@ -109,6 +118,15 @@ class CameraControlViewModel @Inject constructor(
 
     fun tapToFocus(meteringAction: androidx.camera.core.FocusMeteringAction) {
         try { cameraStateHolder.cameraControl?.startFocusAndMetering(meteringAction) } catch (_: Exception) {}
+    }
+
+    fun tapToFocus(normalizedX: Float, normalizedY: Float) {
+        if (!streamStateHolder.useAvc.value) return
+        context.startService(Intent(context, StreamService::class.java).apply {
+            action = "com.example.handycam.ACTION_SET_FOCUS_POINT"
+            putExtra("x", normalizedX)
+            putExtra("y", normalizedY)
+        })
     }
 
     fun switchCamera(cameraId: String) {

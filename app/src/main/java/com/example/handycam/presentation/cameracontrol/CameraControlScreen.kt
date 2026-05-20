@@ -31,20 +31,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Exposure
-import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.CenterFocusWeak
 import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Exposure
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,14 +77,11 @@ fun CameraControlScreen(
     val torchEnabled by viewModel.torchEnabled.collectAsState()
     val exposure by viewModel.exposure.collectAsState()
     val zoom by viewModel.zoom.collectAsState()
+    val autoFocus by viewModel.autoFocus.collectAsState()
     val autoExposure by viewModel.autoExposure.collectAsState()
     val selectedCameraId by viewModel.streamStateHolder.camera.collectAsState()
     val whiteBalance by viewModel.whiteBalance.collectAsState()
     val whiteBalanceLocked by viewModel.whiteBalanceLocked.collectAsState()
-    val iso by viewModel.iso.collectAsState()
-    val isoLocked by viewModel.isoLocked.collectAsState()
-    val shutterSpeedNs by viewModel.shutterSpeedNs.collectAsState()
-    val shutterLocked by viewModel.shutterLocked.collectAsState()
     val zoomLocked by viewModel.zoomLocked.collectAsState()
     val gridEnabled by viewModel.gridEnabled.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
@@ -96,12 +91,11 @@ fun CameraControlScreen(
     var focusRingVisible by remember { mutableStateOf(false) }
     var focusRingOffset by remember { mutableStateOf(Offset.Zero) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
-        var showZoomLabel by remember { mutableStateOf(false) }
+    var showZoomLabel by remember { mutableStateOf(false) }
 
-        LaunchedEffect(showZoomLabel) { if (showZoomLabel) { delay(1500); showZoomLabel = false } }
+    LaunchedEffect(showZoomLabel) { if (showZoomLabel) { delay(1500); showZoomLabel = false } }
 
     var cameraWheelOpen by remember { mutableStateOf(false) }
-    var isoWheelOpen by remember { mutableStateOf(false) }
 
     var dragStartY by remember { mutableFloatStateOf(0f) }
     var dragStartExposure by remember { mutableIntStateOf(0) }
@@ -119,20 +113,13 @@ fun CameraControlScreen(
             8 to "Shade",
         )
     }
-    val isoChoices = remember {
-        listOf(0, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200)
-    }
 
     val selectedCameraIndex = cameras.indexOfFirst { it.id == selectedCameraId }.let { if (it >= 0) it else 0 }
-    val selectedIsoIndex = isoChoices.indexOfFirst { it == iso }.let {
-        if (it >= 0) it else isoChoices.indexOfLast { value -> value < iso }.coerceAtLeast(0)
-    }
 
-    val wbLockedUi = if (useAvc) whiteBalanceLocked else false
-    val zoomLockedUi = if (useAvc) zoomLocked else false
-    val exposureLockedUi = if (useAvc) autoExposure else false
-    val isoLockedUi = if (useAvc) isoLocked else true
-    val shutterLockedUi = if (useAvc) shutterLocked else true
+    val wbLockedUi = whiteBalanceLocked
+    val zoomLockedUi = zoomLocked
+    val focusLockedUi = !autoFocus
+    val exposureLockedUi = !autoExposure
 
     fun shutterLabel(valueNs: Long): String {
         if (valueNs <= 0L) return "Auto"
@@ -219,7 +206,7 @@ fun CameraControlScreen(
                                     }
                                     lastSpan = span
                                     pointers.forEach { it.consume() }
-                                        showZoomLabel = true
+                                    showZoomLabel = true
                                 }
                             } else {
                                 lastSpan = 0f
@@ -251,15 +238,24 @@ fun CameraControlScreen(
 
                                     !change.pressed && change.previousPressed -> {
                                         if (!isDragging) {
-                                            val previewView = previewViewRef ?: return@awaitPointerEventScope
-                                            val point = previewView.meteringPointFactory.createPoint(change.position.x, change.position.y)
-                                            viewModel.tapToFocus(
-                                                FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
-                                                    .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
-                                                    .build()
-                                            )
-                                            focusRingOffset = change.position
-                                            focusRingVisible = true
+                                            if (autoFocus) {
+                                                if (useAvc) {
+                                                    viewModel.tapToFocus(
+                                                        change.position.x / size.width.toFloat().coerceAtLeast(1f),
+                                                        change.position.y / size.height.toFloat().coerceAtLeast(1f)
+                                                    )
+                                                } else {
+                                                    val previewView = previewViewRef ?: return@awaitPointerEventScope
+                                                    val point = previewView.meteringPointFactory.createPoint(change.position.x, change.position.y)
+                                                    viewModel.tapToFocus(
+                                                        FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                                                            .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
+                                                            .build()
+                                                    )
+                                                }
+                                                focusRingOffset = change.position
+                                                focusRingVisible = true
+                                            }
                                         }
                                         isDragging = false
                                     }
@@ -326,7 +322,7 @@ fun CameraControlScreen(
                     )
                 }
 
-                IconButton(onClick = { if (useAvc || !exposureLockedUi) { showEvLabel = true; viewModel.setAutoExposure(!autoExposure) } }) {
+                IconButton(onClick = { showEvLabel = true; viewModel.setAutoExposure(!autoExposure) }) {
                     Icon(
                         imageVector = Icons.Filled.Exposure,
                         contentDescription = if (exposureLockedUi) "Exposure locked" else "Exposure unlocked",
@@ -334,7 +330,7 @@ fun CameraControlScreen(
                     )
                 }
 
-                IconButton(onClick = { if (useAvc || !zoomLockedUi) { showZoomLabel = true; viewModel.setZoomLocked(!zoomLockedUi) } }) {
+                IconButton(onClick = { showZoomLabel = true; viewModel.setZoomLocked(!zoomLockedUi) }) {
                     Icon(
                         imageVector = Icons.Filled.ZoomIn,
                         contentDescription = if (zoomLockedUi) "Zoom locked" else "Zoom unlocked",
@@ -342,40 +338,19 @@ fun CameraControlScreen(
                     )
                 }
 
-                IconButton(onClick = { if (useAvc || !wbLockedUi) viewModel.setWhiteBalanceLocked(!wbLockedUi) }) {
+                IconButton(onClick = { viewModel.setAutoFocus(!autoFocus) }) {
                     Icon(
-                        imageVector = Icons.Filled.GridOn,
+                        imageVector = if (focusLockedUi) Icons.Filled.CenterFocusWeak else Icons.Filled.CenterFocusStrong,
+                        contentDescription = if (focusLockedUi) "Focus locked" else "Focus unlocked",
+                        tint = if (focusLockedUi) Color(0xFFFF5A5A) else Color.White
+                    )
+                }
+
+                IconButton(onClick = { viewModel.setWhiteBalanceLocked(!wbLockedUi) }) {
+                    Icon(
+                        imageVector = Icons.Filled.ColorLens,
                         contentDescription = if (wbLockedUi) "White balance locked" else "White balance unlocked",
                         tint = if (wbLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-
-                IconButton(onClick = {
-                    if (useAvc || !isoLockedUi) {
-                        if (isoWheelOpen) {
-                            isoWheelOpen = false
-                        } else {
-                            isoWheelOpen = true
-                            cameraWheelOpen = false
-                        }
-                    }
-                }) {
-                    Icon(
-                        imageVector = Icons.Filled.Exposure,
-                        contentDescription = if (isoLockedUi) "ISO locked" else "ISO selector",
-                        tint = if (isoLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-
-                IconButton(onClick = {
-                    if (useAvc || !shutterLockedUi) {
-                        viewModel.setShutterLocked(!shutterLockedUi)
-                    }
-                }) {
-                    Icon(
-                        imageVector = Icons.Filled.Timer,
-                        contentDescription = if (shutterLockedUi) "Shutter locked" else "Shutter unlocked",
-                        tint = if (shutterLockedUi) Color(0xFFFF5A5A) else Color.White
                     )
                 }
             }
@@ -394,24 +369,6 @@ fun CameraControlScreen(
                     entries = cameras.map { it.displayName },
                     selectedIndex = selectedCameraIndex,
                     onSelected = { index -> cameras.getOrNull(index)?.let { viewModel.switchCamera(it.id) } },
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-        }
-
-        if (isoWheelOpen && !isoLockedUi) {
-            Surface(
-                color = Color(0xD11A1A1A),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 72.dp, end = 12.dp)
-            ) {
-                WheelPickerPanel(
-                    title = "ISO",
-                    entries = isoChoices.map { if (it == 0) "Auto" else it.toString() },
-                    selectedIndex = selectedIsoIndex,
-                    onSelected = { index -> isoChoices.getOrNull(index)?.let(viewModel::setIso) },
                     modifier = Modifier.padding(12.dp)
                 )
             }
@@ -462,9 +419,7 @@ fun CameraControlScreen(
             }
         }
 
-        val manualControlsAllLocked = wbLockedUi && isoLockedUi && shutterLockedUi
-
-        if (!manualControlsAllLocked) {
+        if (!wbLockedUi) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -474,70 +429,25 @@ fun CameraControlScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Show only manual controls when at least one is unlocked.
-                if (useAvc) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("White balance", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                text = if (wbLockedUi) "Locked" else "Unlocked",
-                                color = if (wbLockedUi) Color(0xFFFF5A5A) else Color.White,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("White balance", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = if (wbLockedUi) "Locked" else "Unlocked",
+                            color = if (wbLockedUi) Color(0xFFFF5A5A) else Color.White,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
 
-                        if (!wbLockedUi) {
-                            val currentWhiteBalanceIndex = whiteBalanceModes.indexOfFirst { it.first == whiteBalance }.let { if (it >= 0) it else 0 }
-                            OutlinedButton(
-                                onClick = {
-                                    val nextIndex = (currentWhiteBalanceIndex + 1) % whiteBalanceModes.size
-                                    viewModel.setWhiteBalance(whiteBalanceModes[nextIndex].first)
-                                }
-                            ) {
-                                Text(whiteBalanceModes[currentWhiteBalanceIndex].second, color = Color.White)
-                            }
+                    val currentWhiteBalanceIndex = whiteBalanceModes.indexOfFirst { it.first == whiteBalance }.let { if (it >= 0) it else 0 }
+                    OutlinedButton(
+                        onClick = {
+                            val nextIndex = (currentWhiteBalanceIndex + 1) % whiteBalanceModes.size
+                            viewModel.setWhiteBalance(whiteBalanceModes[nextIndex].first)
                         }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("ISO", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                text = if (isoLockedUi) "Locked" else "Unlocked",
-                                color = if (isoLockedUi) Color(0xFFFF5A5A) else Color.White,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-
-                        if (!isoLockedUi) {
-                            WheelPickerPanel(
-                                title = "ISO",
-                                entries = isoChoices.map { if (it == 0) "Auto" else it.toString() },
-                                selectedIndex = selectedIsoIndex,
-                                onSelected = { index -> isoChoices.getOrNull(index)?.let(viewModel::setIso) }
-                            )
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Shutter", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                text = if (shutterLockedUi) "Locked" else "Unlocked",
-                                color = if (shutterLockedUi) Color(0xFFFF5A5A) else Color.White,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-
-                        if (!shutterLockedUi) {
-                            Text(shutterLabel(shutterSpeedNs), color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelSmall)
-                            Slider(
-                                value = maxOf(shutterSpeedNs, 250_000L).toFloat(),
-                                onValueChange = { viewModel.setShutterSpeedNs(it.toLong()) },
-                                valueRange = 250_000f..66_000_000f,
-                                enabled = true,
-                                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
-                            )
-                        }
+                    ) {
+                        Text(whiteBalanceModes[currentWhiteBalanceIndex].second, color = Color.White)
                     }
                 }
             }
