@@ -25,6 +25,7 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Samsung A50 Android 11
 
 ## ToDo
+- Implement new HEVC feature from droidcam plugin
 - Clean up Code
 - Remote Control Camera Focus
 - Auto-Disover Phone Camera Capabilites
