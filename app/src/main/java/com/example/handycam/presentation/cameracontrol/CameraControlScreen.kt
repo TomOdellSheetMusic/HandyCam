@@ -1,60 +1,23 @@
 package com.example.handycam.presentation.cameracontrol
 
-import android.view.SurfaceHolder
-import android.view.SurfaceView
-import android.widget.NumberPicker
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.view.PreviewView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.ColorLens
-import androidx.compose.material.icons.filled.CenterFocusStrong
-import androidx.compose.material.icons.filled.CenterFocusWeak
-import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.Exposure
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -68,6 +31,7 @@ import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraControlScreen(
     viewModel: CameraControlViewModel,
@@ -77,13 +41,6 @@ fun CameraControlScreen(
     val torchEnabled by viewModel.torchEnabled.collectAsState()
     val exposure by viewModel.exposure.collectAsState()
     val zoom by viewModel.zoom.collectAsState()
-    val autoFocus by viewModel.autoFocus.collectAsState()
-    val autoExposure by viewModel.autoExposure.collectAsState()
-    val selectedCameraId by viewModel.streamStateHolder.camera.collectAsState()
-    val whiteBalance by viewModel.whiteBalance.collectAsState()
-    val whiteBalanceLocked by viewModel.whiteBalanceLocked.collectAsState()
-    val zoomLocked by viewModel.zoomLocked.collectAsState()
-    val gridEnabled by viewModel.gridEnabled.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
     val useAvc by viewModel.useAvc.collectAsState()
 
@@ -91,68 +48,47 @@ fun CameraControlScreen(
     var focusRingVisible by remember { mutableStateOf(false) }
     var focusRingOffset by remember { mutableStateOf(Offset.Zero) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
-    var showZoomLabel by remember { mutableStateOf(false) }
 
-    LaunchedEffect(showZoomLabel) { if (showZoomLabel) { delay(1500); showZoomLabel = false } }
+    var cameraDropdownOpen by remember { mutableStateOf(false) }
+    var selectedCamera by remember(cameras) { mutableStateOf(cameras.firstOrNull()) }
 
-    var cameraWheelOpen by remember { mutableStateOf(false) }
-
+    // Touch gesture state
     var dragStartY by remember { mutableFloatStateOf(0f) }
     var dragStartExposure by remember { mutableIntStateOf(0) }
     var isDragging by remember { mutableStateOf(false) }
 
-    val whiteBalanceModes = remember {
-        listOf(
-            1 to "Auto",
-            2 to "Incandescent",
-            3 to "Fluorescent",
-            4 to "Warm fluorescent",
-            5 to "Daylight",
-            6 to "Cloudy daylight",
-            7 to "Twilight",
-            8 to "Shade",
-        )
-    }
-
-    val selectedCameraIndex = cameras.indexOfFirst { it.id == selectedCameraId }.let { if (it >= 0) it else 0 }
-
-    val wbLockedUi = whiteBalanceLocked
-    val zoomLockedUi = zoomLocked
-    val focusLockedUi = !autoFocus
-    val exposureLockedUi = !autoExposure
-
-    fun shutterLabel(valueNs: Long): String {
-        if (valueNs <= 0L) return "Auto"
-        val seconds = valueNs / 1_000_000_000.0
-        return if (seconds >= 1.0) "${"%.1f".format(seconds)}s" else "1/${(1.0 / seconds).roundToInt().coerceAtLeast(1)}"
-    }
-
+    // EV and focus ring auto-hide
     LaunchedEffect(showEvLabel) { if (showEvLabel) { delay(1500); showEvLabel = false } }
     LaunchedEffect(focusRingVisible) { if (focusRingVisible) { delay(700); focusRingVisible = false } }
+
+    // Go back when stream stops
     LaunchedEffect(isStreaming) { if (!isStreaming) onBack() }
 
+    // Clean up preview surface on exit
     DisposableEffect(useAvc) {
         onDispose {
-            if (useAvc) viewModel.setPreviewSurface(null) else viewModel.setPreviewSurfaceProvider(null)
+            if (useAvc) viewModel.setPreviewSurface(null)
+            else viewModel.setPreviewSurfaceProvider(null)
         }
     }
 
     val density = LocalDensity.current
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // ── Camera preview ────────────────────────────────────────────
         if (useAvc) {
+            // AVC: Camera2 owns the camera — use a SurfaceView whose Surface is
+            // added directly to the Camera2 capture session (no CameraX conflict).
             AndroidView(
                 factory = { ctx ->
-                    SurfaceView(ctx).also { surfaceView ->
-                        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+                    SurfaceView(ctx).also { sv ->
+                        sv.holder.addCallback(object : SurfaceHolder.Callback {
                             override fun surfaceCreated(holder: SurfaceHolder) {
                                 viewModel.setPreviewSurface(holder.surface)
                             }
-
-                            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                            override fun surfaceChanged(holder: SurfaceHolder, f: Int, w: Int, h: Int) {
                                 viewModel.setPreviewSurface(holder.surface)
                             }
-
                             override fun surfaceDestroyed(holder: SurfaceHolder) {
                                 viewModel.setPreviewSurface(null)
                             }
@@ -164,30 +100,21 @@ fun CameraControlScreen(
         } else {
             AndroidView(
                 factory = { ctx ->
-                    PreviewView(ctx).also { previewView ->
-                        previewViewRef = previewView
-                        viewModel.setPreviewSurfaceProvider(previewView.surfaceProvider)
+                    PreviewView(ctx).also { pv ->
+                        previewViewRef = pv
+                        viewModel.setPreviewSurfaceProvider(pv.surfaceProvider)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
         }
 
-        if (gridEnabled) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val thirdWidth = size.width / 3f
-                val thirdHeight = size.height / 3f
-                for (i in 1..2) {
-                    drawLine(Color.White.copy(alpha = 0.38f), Offset(thirdWidth * i, 0f), Offset(thirdWidth * i, size.height), 1.5f)
-                    drawLine(Color.White.copy(alpha = 0.38f), Offset(0f, thirdHeight * i), Offset(size.width, thirdHeight * i), 1.5f)
-                }
-            }
-        }
-
+        // ── Gesture layer (tap-to-focus, drag-to-EV, pinch-to-zoom) ──
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
+                    // Pinch-to-zoom via scale gesture
                     awaitPointerEventScope {
                         var lastSpan = 0f
                         while (true) {
@@ -195,19 +122,17 @@ fun CameraControlScreen(
                             val pointers = event.changes.filter { it.pressed }
 
                             if (pointers.size == 2) {
-                                if (!zoomLockedUi) {
-                                    val p0 = pointers[0].position
-                                    val p1 = pointers[1].position
-                                    val span = (p0 - p1).getDistance()
-                                    if (lastSpan > 0f) {
-                                        val scaleFactor = span / lastSpan
-                                        val newZoom = (viewModel.zoom.value + (scaleFactor - 1f) * 0.5f).coerceIn(0f, 1f)
-                                        viewModel.setZoom(newZoom)
-                                    }
-                                    lastSpan = span
-                                    pointers.forEach { it.consume() }
-                                    showZoomLabel = true
+                                // Pinch gesture
+                                val p0 = pointers[0].position
+                                val p1 = pointers[1].position
+                                val span = (p0 - p1).getDistance()
+                                if (lastSpan > 0f) {
+                                    val scaleFactor = span / lastSpan
+                                    val newZoom = (viewModel.zoom.value + (scaleFactor - 1f) * 0.5f).coerceIn(0f, 1f)
+                                    viewModel.setZoom(newZoom)
                                 }
+                                lastSpan = span
+                                pointers.forEach { it.consume() }
                             } else {
                                 lastSpan = 0f
                                 val change = event.changes.firstOrNull() ?: continue
@@ -218,16 +143,15 @@ fun CameraControlScreen(
                                         dragStartExposure = viewModel.exposure.value
                                         isDragging = false
                                     }
-
                                     change.pressed && change.previousPressed -> {
                                         val dy = dragStartY - change.position.y
-                                        if (autoExposure && kotlin.math.abs(dy) > 40) {
+                                        if (kotlin.math.abs(dy) > 40) {
                                             isDragging = true
                                             val range = viewModel.cameraStateHolder.cameraInfo
                                                 ?.exposureState?.exposureCompensationRange
                                             if (range != null) {
-                                                val span = range.upper - range.lower
-                                                val delta = ((dy / size.height) * span).toInt()
+                                                val span2 = range.upper - range.lower
+                                                val delta = ((dy / size.height) * span2).toInt()
                                                 val newEv = (dragStartExposure + delta).coerceIn(range.lower, range.upper)
                                                 viewModel.setExposure(newEv)
                                                 showEvLabel = true
@@ -235,27 +159,20 @@ fun CameraControlScreen(
                                             change.consume()
                                         }
                                     }
-
                                     !change.pressed && change.previousPressed -> {
                                         if (!isDragging) {
-                                            if (autoFocus) {
-                                                if (useAvc) {
-                                                    viewModel.tapToFocus(
-                                                        change.position.x / size.width.toFloat().coerceAtLeast(1f),
-                                                        change.position.y / size.height.toFloat().coerceAtLeast(1f)
-                                                    )
-                                                } else {
-                                                    val previewView = previewViewRef ?: return@awaitPointerEventScope
-                                                    val point = previewView.meteringPointFactory.createPoint(change.position.x, change.position.y)
-                                                    viewModel.tapToFocus(
-                                                        FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
-                                                            .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
-                                                            .build()
-                                                    )
-                                                }
-                                                focusRingOffset = change.position
-                                                focusRingVisible = true
-                                            }
+                                            // Tap-to-focus
+                                            val pv = previewViewRef ?: return@awaitPointerEventScope
+                                            val point = pv.meteringPointFactory.createPoint(
+                                                change.position.x, change.position.y
+                                            )
+                                            viewModel.tapToFocus(
+                                                FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+                                                    .setAutoCancelDuration(3_000, TimeUnit.MILLISECONDS)
+                                                    .build()
+                                            )
+                                            focusRingOffset = change.position
+                                            focusRingVisible = true
                                         }
                                         isDragging = false
                                     }
@@ -266,6 +183,7 @@ fun CameraControlScreen(
                 }
         )
 
+        // ── Focus ring ────────────────────────────────────────────────
         AnimatedVisibility(
             visible = focusRingVisible,
             enter = scaleIn(initialScale = 0.5f) + fadeIn(),
@@ -284,100 +202,73 @@ fun CameraControlScreen(
             )
         }
 
+        // ── Top bar ───────────────────────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Back button
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
 
             Spacer(Modifier.weight(1f))
 
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { cameraWheelOpen = !cameraWheelOpen }) {
-                    Icon(Icons.Filled.CameraAlt, contentDescription = "Switch camera", tint = Color.White)
-                }
-
-                IconButton(onClick = { viewModel.toggleTorch() }) {
-                    Icon(
-                        imageVector = if (torchEnabled) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
-                        contentDescription = "Toggle torch",
-                        tint = if (torchEnabled) Color.White else Color(0xFFFF5A5A)
-                    )
-                }
-
-                IconButton(onClick = { viewModel.setGridEnabled(!gridEnabled) }) {
-                    Icon(
-                        imageVector = Icons.Filled.GridOn,
-                        contentDescription = if (gridEnabled) "Disable grid" else "Enable grid",
-                        tint = if (gridEnabled) Color.White else Color(0xFFFF5A5A)
-                    )
-                }
-
-                IconButton(onClick = { showEvLabel = true; viewModel.setAutoExposure(!autoExposure) }) {
-                    Icon(
-                        imageVector = Icons.Filled.Exposure,
-                        contentDescription = if (exposureLockedUi) "Exposure locked" else "Exposure unlocked",
-                        tint = if (exposureLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-
-                IconButton(onClick = { showZoomLabel = true; viewModel.setZoomLocked(!zoomLockedUi) }) {
-                    Icon(
-                        imageVector = Icons.Filled.ZoomIn,
-                        contentDescription = if (zoomLockedUi) "Zoom locked" else "Zoom unlocked",
-                        tint = if (zoomLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-
-                IconButton(onClick = { viewModel.setAutoFocus(!autoFocus) }) {
-                    Icon(
-                        imageVector = if (focusLockedUi) Icons.Filled.CenterFocusWeak else Icons.Filled.CenterFocusStrong,
-                        contentDescription = if (focusLockedUi) "Focus locked" else "Focus unlocked",
-                        tint = if (focusLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-
-                IconButton(onClick = { viewModel.setWhiteBalanceLocked(!wbLockedUi) }) {
-                    Icon(
-                        imageVector = Icons.Filled.ColorLens,
-                        contentDescription = if (wbLockedUi) "White balance locked" else "White balance unlocked",
-                        tint = if (wbLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
-                }
-            }
-        }
-
-        if (cameraWheelOpen) {
-            Surface(
-                color = Color(0xD11A1A1A),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 72.dp, end = 12.dp)
-            ) {
-                WheelPickerPanel(
-                    title = "Camera",
-                    entries = cameras.map { it.displayName },
-                    selectedIndex = selectedCameraIndex,
-                    onSelected = { index -> cameras.getOrNull(index)?.let { viewModel.switchCamera(it.id) } },
-                    modifier = Modifier.padding(12.dp)
+            // Torch toggle
+            IconButton(onClick = { viewModel.toggleTorch() }) {
+                Icon(
+                    imageVector = if (torchEnabled) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
+                    contentDescription = "Toggle torch",
+                    tint = if (torchEnabled) Color.Yellow else Color.White
                 )
             }
+
+            // Camera switcher
+            ExposedDropdownMenuBox(
+                expanded = cameraDropdownOpen,
+                onExpandedChange = { cameraDropdownOpen = it }
+            ) {
+                TextButton(
+                    onClick = { cameraDropdownOpen = true },
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                ) {
+                    Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color.White,
+                        modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = selectedCamera?.let {
+                            when (it.facing) {
+                                "front" -> "Front"
+                                "back" -> "Back"
+                                else -> it.id
+                            }
+                        } ?: "Camera",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+                ExposedDropdownMenu(expanded = cameraDropdownOpen, onDismissRequest = { cameraDropdownOpen = false }) {
+                    cameras.forEach { cam ->
+                        DropdownMenuItem(
+                            text = { Text(cam.displayName) },
+                            onClick = {
+                                selectedCamera = cam
+                                viewModel.switchCamera(cam.id)
+                                cameraDropdownOpen = false
+                            }
+                        )
+                    }
+                }
+            }
         }
 
+        // ── EV label ──────────────────────────────────────────────────
         AnimatedVisibility(
-            visible = showEvLabel && autoExposure,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            visible = showEvLabel,
+            enter = fadeIn(), exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 16.dp)
@@ -395,62 +286,42 @@ fun CameraControlScreen(
             }
         }
 
-        AnimatedVisibility(
-            visible = showZoomLabel,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 16.dp)
-        ) {
-            Surface(
-                color = Color(0xCC000000),
-                shape = MaterialTheme.shapes.small
-            ) {
-                val minZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.minZoomRatio ?: 1f
-                val maxZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8f
-                val zoomRatio = minZoom + (maxZoom - minZoom) * zoom
-                Text(
-                    text = "${"%.1f".format(zoomRatio)}x",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                )
-            }
-        }
-
-        if (!wbLockedUi) {
-            Column(
+        // ── Hint: drag to adjust exposure ────────────────────────────
+        if (!showEvLabel && !isDragging) {
+            Text(
+                "↕ drag for exposure · tap to focus · pinch to zoom",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0x99FFFFFF),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("White balance", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = if (wbLockedUi) "Locked" else "Unlocked",
-                            color = if (wbLockedUi) Color(0xFFFF5A5A) else Color.White,
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
+                    .padding(bottom = 72.dp)
+            )
+        }
 
-                    val currentWhiteBalanceIndex = whiteBalanceModes.indexOfFirst { it.first == whiteBalance }.let { if (it >= 0) it else 0 }
-                    OutlinedButton(
-                        onClick = {
-                            val nextIndex = (currentWhiteBalanceIndex + 1) % whiteBalanceModes.size
-                            viewModel.setWhiteBalance(whiteBalanceModes[nextIndex].first)
-                        }
-                    ) {
-                        Text(whiteBalanceModes[currentWhiteBalanceIndex].second, color = Color.White)
-                    }
-                }
-            }
+        // ── Zoom bar ──────────────────────────────────────────────────
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val minZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.minZoomRatio ?: 1f
+            val maxZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8f
+            val zoomRatio = minZoom + (maxZoom - minZoom) * zoom
+            Text(
+                "%.1fx".format(zoomRatio),
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.width(40.dp)
+            )
+            Slider(
+                value = zoom,
+                onValueChange = { viewModel.setZoom(it) },
+                modifier = Modifier.weight(1f),
+                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White)
+            )
         }
     }
 
@@ -459,46 +330,3 @@ fun CameraControlScreen(
     }
 }
 
-@Composable
-private fun WheelPickerPanel(
-    title: String,
-    entries: List<String>,
-    selectedIndex: Int,
-    onSelected: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(title, color = Color.White, style = MaterialTheme.typography.labelLarge)
-        AndroidView(
-            factory = { context ->
-                NumberPicker(context).apply {
-                    descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
-                    wrapSelectorWheel = true
-                    setOnValueChangedListener { _, _, newValue -> onSelected(newValue) }
-                }
-            },
-            update = { picker ->
-                val maxIndex = (entries.size - 1).coerceAtLeast(0)
-                picker.minValue = 0
-                picker.maxValue = maxIndex
-
-                val newValues = entries.toTypedArray()
-                val currentValues = picker.displayedValues
-                if (currentValues == null || currentValues.size != newValues.size || !currentValues.contentEquals(newValues)) {
-                    picker.displayedValues = null
-                    picker.displayedValues = newValues
-                }
-
-                val safeIndex = selectedIndex.coerceIn(0, maxIndex)
-                if (picker.value != safeIndex) {
-                    picker.value = safeIndex
-                }
-            },
-            modifier = Modifier.size(width = 160.dp, height = 220.dp)
-        )
-    }
-}
