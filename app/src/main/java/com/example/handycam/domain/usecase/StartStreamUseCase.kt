@@ -27,7 +27,7 @@ class StartStreamUseCase @Inject constructor(
         return try {
             // Save settings
             settingsRepository.updateHost(host)
-            settingsRepository.updatePort(port)
+            settingsRepository.updateStreamingPort(port)
             settingsRepository.updateCamera(camera)
             settingsRepository.updateStreamConfig(streamConfig)
             settingsRepository.updateStreamingState(true)

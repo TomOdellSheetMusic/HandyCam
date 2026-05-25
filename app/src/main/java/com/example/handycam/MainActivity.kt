@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_START"
             putExtra("host", mainViewModel.streamStateHolder.host.value)
-            putExtra("port", mainViewModel.streamStateHolder.port.value)
+            putExtra("streamingPort", mainViewModel.streamStateHolder.streamingPort.value)
             putExtra("width", mainViewModel.streamStateHolder.width.value)
             putExtra("height", mainViewModel.streamStateHolder.height.value)
             putExtra("camera", mainViewModel.streamStateHolder.camera.value)

@@ -46,7 +46,7 @@ private const val ACTION_STOP_SERVER = "com.example.handycam.ACTION_STOP_HTTPS_S
 class KtorHttpsServerService : LifecycleService() {
     
     private var server: NettyApplicationEngine? = null
-    private var serverPort = 8443
+    private var httpPort = 8443
     private var isRunning = false
     @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
     
@@ -62,7 +62,7 @@ class KtorHttpsServerService : LifecycleService() {
         
         when (intent?.action) {
             ACTION_START_SERVER -> {
-                serverPort = intent.getIntExtra("port", 8443)
+                httpPort = intent.getIntExtra("httpPort", 8443)
                 startHttpServer()
             }
             ACTION_STOP_SERVER -> {
@@ -135,18 +135,18 @@ class KtorHttpsServerService : LifecycleService() {
                 // startTime = System.currentTimeMillis()
 
                 // Run a plain HTTP server (no TLS/keystore) for local control
-                server = embeddedServer(Netty, port = serverPort) {
+                server = embeddedServer(Netty, port = httpPort) {
                     configureRouting()
                 }.apply { start(wait = false) }
 
                 isRunning = true
 
                 launch(Dispatchers.Main) {
-                    startForeground(NOTIF_ID, buildNotification("Running on port $serverPort"))
+                    startForeground(NOTIF_ID, buildNotification("Running on port $httpPort"))
                     broadcastServerState(true)
                 }
 
-                Log.i(TAG, "HTTP Server started on port $serverPort")
+                Log.i(TAG, "HTTP Server started on port $httpPort")
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start HTTP server", e)
@@ -232,12 +232,12 @@ class KtorHttpsServerService : LifecycleService() {
             
             get("/status") {
                 val uptime = System.currentTimeMillis() - startTime
-                call.respond(ServerStatus(
-                    status = "running",
-                    streaming = (streamStateHolder.isStreaming.value),
-                    port = serverPort,
-                    uptime = uptime
-                ))
+                    call.respond(ServerStatus(
+                        status = "running",
+                        streaming = (streamStateHolder.isStreaming.value),
+                        port = (streamStateHolder.streamingPort.value),
+                        uptime = uptime
+                    ))
             }
             
             get("/info") {
@@ -256,7 +256,7 @@ class KtorHttpsServerService : LifecycleService() {
             get("/api/camera/status") {
                 val status = CameraStatusResponse(
                     streaming = (streamStateHolder.isStreaming.value),
-                    port = (streamStateHolder.port.value),
+                    port = (streamStateHolder.streamingPort.value),
                     camera = (streamStateHolder.camera.value),
                     width = (streamStateHolder.width.value),
                     height = (streamStateHolder.height.value),
@@ -328,6 +328,8 @@ class KtorHttpsServerService : LifecycleService() {
                         // Ensure the Intent is explicit about the target component and package
                         openIntent.component = ComponentName(packageName, MainActivity::class.java.name)
                         openIntent.setPackage(packageName)
+                        // include streaming port so MainActivity can handle a deferred start
+                        openIntent.putExtra("streamingPort", streamStateHolder.streamingPort.value)
                         val openPending = PendingIntent.getActivity(
                             this@KtorHttpsServerService,
                             100,
@@ -358,7 +360,7 @@ class KtorHttpsServerService : LifecycleService() {
                     val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_START"
                         putExtra("host", streamStateHolder.host.value)
-                        putExtra("port", streamStateHolder.port.value)
+                        putExtra("streamingPort", streamStateHolder.streamingPort.value)
                         putExtra("width", streamStateHolder.width.value)
                         putExtra("height", streamStateHolder.height.value)
                         putExtra("camera", streamStateHolder.camera.value)
@@ -509,9 +511,9 @@ class KtorHttpsServerService : LifecycleService() {
             post("/api/settings/port") {
                 try {
                     val params = call.receive<Map<String, Int>>()
-                    val port = params["port"] ?: 4747
-                    streamStateHolder.setPort(port)
-                    call.respond(ApiResponse(true, "Port updated to $port"))
+                    val port = params["streamingPort"] ?: params["port"] ?: 4747
+                    streamStateHolder.setStreamingPort(port)
+                    call.respond(ApiResponse(true, "Streaming port updated to $port"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid port: ${e.message}"))
                 }

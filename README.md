@@ -13,7 +13,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 - Connection over Wifi or USB (USB Debugging has to be enabled on the phone)
 - Dark and light Theme depending on System Theme
 
-Note: It's not possible to start the camera stream from the api if the app is not in the foreground on Android 14+ <br>
+Note: It's not possible to start the camera stream from the api if the app is not in the foreground <br>
 
 ## Installation
 Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
@@ -25,6 +25,7 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Samsung A50 Android 11
 
 ## ToDo
+- Implement new HEVC feature from droidcam plugin
 - Clean up Code
 - Remote Control Camera Focus
 - Auto-Disover Phone Camera Capabilites
