@@ -379,12 +379,11 @@ class StreamService : LifecycleService() {
                 CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             try { b.set(CaptureRequest.FLASH_MODE, flashMode) } catch (_: Exception) {}
             // Exposure compensation & lock
-            val aeLocked = !streamStateHolder.autoExposure.value
-            try { b.set(CaptureRequest.CONTROL_AE_LOCK, aeLocked) } catch (_: Exception) {}
-            if (!aeLocked) {
-                val ev = streamStateHolder.exposure.value
-                try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
-            }
+            val autoExposureEnabled = streamStateHolder.autoExposure.value
+            try { b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (_: Exception) {}
+            try { b.set(CaptureRequest.CONTROL_AE_LOCK, !autoExposureEnabled) } catch (_: Exception) {}
+            val ev = streamStateHolder.exposure.value
+            try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
 
             // Focus lock
             val afMode = if (streamStateHolder.autoFocus.value)
