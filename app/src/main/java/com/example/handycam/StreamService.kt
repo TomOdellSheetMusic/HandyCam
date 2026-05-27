@@ -368,9 +368,21 @@ class StreamService : LifecycleService() {
             val flashMode = if (streamStateHolder.torchEnabled.value)
                 CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
             try { b.set(CaptureRequest.FLASH_MODE, flashMode) } catch (_: Exception) {}
-            // Exposure compensation
-            val ev = streamStateHolder.exposure.value
-            try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
+            // Exposure compensation & lock
+            val aeLocked = !streamStateHolder.autoExposure.value
+            try { b.set(CaptureRequest.CONTROL_AE_LOCK, aeLocked) } catch (_: Exception) {}
+            if (!aeLocked) {
+                val ev = streamStateHolder.exposure.value
+                try { b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, ev) } catch (_: Exception) {}
+            }
+
+            // Focus lock
+            val afMode = if (streamStateHolder.autoFocus.value)
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+            else
+                CaptureRequest.CONTROL_AF_MODE_OFF
+            try { b.set(CaptureRequest.CONTROL_AF_MODE, afMode) } catch (_: Exception) {}
+
             // Zoom
             val zoom = streamStateHolder.zoom.value
             if (zoom > 0f) {
@@ -392,6 +404,14 @@ class StreamService : LifecycleService() {
                     }
                 } catch (_: Exception) {}
             }
+            // White balance
+            val wbMode = if (!streamStateHolder.whiteBalanceLocked.value) {
+                CaptureRequest.CONTROL_AWB_MODE_AUTO
+            } else {
+                streamStateHolder.whiteBalance.value
+            }
+            try { b.set(CaptureRequest.CONTROL_AWB_MODE, wbMode) } catch (_: Exception) {}
+
             b.build()
         } catch (e: Exception) {
             Log.e(TAG, "buildCamera2Request failed", e)
@@ -508,7 +528,13 @@ class StreamService : LifecycleService() {
     private fun applyWhiteBalance(mode: Int) {
         try {
             if (!useAvc) {
-                Log.i(TAG, "WB change requested for CameraX path (no-op without Camera2Interop)")
+                cameraStateHolder.cameraControl?.let {
+                    androidx.camera.camera2.interop.Camera2CameraControl.from(it).captureRequestOptions =
+                        androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+                            .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, mode)
+                            .build()
+                }
+                Log.i(TAG, "Applied WB via Camera2Interop: $mode")
             } else {
                 updateCamera2Request()
             }
@@ -551,6 +577,8 @@ class StreamService : LifecycleService() {
         if (running) return
         running = true
         // Always stream in landscape — swap if portrait dimensions were passed
+        requestedWidth = width
+        requestedHeight = height
         val w = maxOf(width, height)
         val h = minOf(width, height)
         // store runtime options
@@ -559,8 +587,6 @@ class StreamService : LifecycleService() {
         targetFps = fps
         useAvc = useAvcFlag
         useScreenCapture = screenCapture
-        requestedWidth = w
-        requestedHeight = h
 
         if (useScreenCapture) {
             if (useAvc) {
@@ -735,6 +761,7 @@ class StreamService : LifecycleService() {
         cameraStateHolder.previewSurfaceProvider = null
         cameraStateHolder.cameraControl = null
         cameraStateHolder.cameraInfo = null
+        cameraStateHolder.setEncoderSize(0, 0)
 
         try {
             // stop and release encoder after camera surfaces are torn down
@@ -901,6 +928,7 @@ class StreamService : LifecycleService() {
         avcConfig = null
         encoderWidth = width
         encoderHeight = height
+        cameraStateHolder.setEncoderSize(width, height)
         Log.i(TAG, "Encoder initialized (surface): ${width}x${height} @ ${fps}fps bitrate=$bitrate")
     }
 
@@ -1393,23 +1421,43 @@ class StreamService : LifecycleService() {
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest by area preserving aspect ratio
+                    // find exact match or choose closest, preserving aspect ratio
                     var chosen = sizes[0]
-                    var bestDiff = Math.abs(chosen.width * chosen.height - nativeReqWidth * nativeReqHeight)
+                    val targetAspectRatio = nativeReqWidth.toFloat() / nativeReqHeight.toFloat()
+                    var bestAspectRatioDiff = Float.MAX_VALUE
+                    var bestAreaDiff = Int.MAX_VALUE
+
                     for (s in sizes) {
+                        // Exact match is always best
                         if (s.width == nativeReqWidth && s.height == nativeReqHeight) {
                             chosen = s
-                            bestDiff = 0
                             break
                         }
-                        val diff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                        if (diff < bestDiff) {
-                            bestDiff = diff
+
+                        val aspectRatio = s.width.toFloat() / s.height.toFloat()
+                        val aspectRatioDiff = Math.abs(aspectRatio - targetAspectRatio)
+
+                        // If aspect ratio is a very close match, consider it.
+                        // Then, from the matching aspect ratios, pick the one with the smallest area difference.
+                        if (aspectRatioDiff < 0.02f) {
+                            val areaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
+                            if (areaDiff < bestAreaDiff) {
+                                bestAreaDiff = areaDiff
+                                bestAspectRatioDiff = aspectRatioDiff
+                                chosen = s
+                            }
+                        } else if (aspectRatioDiff < bestAspectRatioDiff && bestAreaDiff > 200000) {
+                            // If no close aspect ratio has been found yet, and this one is better, take it.
+                            // The area diff check is to avoid picking a much smaller resolution just because
+                            // the aspect ratio is slightly better.
+                            bestAspectRatioDiff = aspectRatioDiff
+                            bestAreaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
                             chosen = s
                         }
                     }
                     chosenWidth = chosen.width
                     chosenHeight = chosen.height
+                    cameraStateHolder.setEncoderSize(chosenWidth, chosenHeight)
                     Log.i(TAG, "Selected camera-compatible size for encoder: ${chosenWidth}x${chosenHeight}")
                     // create encoder with chosen size (reuse if possible)
                     if (encoder != null && encoderWidth == chosenWidth && encoderHeight == chosenHeight) {

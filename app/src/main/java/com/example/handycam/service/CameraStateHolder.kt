@@ -4,6 +4,8 @@ import android.view.Surface
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.Preview
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -31,10 +33,23 @@ class CameraStateHolder @Inject constructor() {
     @Volatile
     var cameraInfo: CameraInfo? = null
 
+    private val _encoderWidth = MutableStateFlow(0)
+    val encoderWidth: StateFlow<Int> = _encoderWidth
+
+    private val _encoderHeight = MutableStateFlow(0)
+    val encoderHeight: StateFlow<Int> = _encoderHeight
+
+    fun setEncoderSize(width: Int, height: Int) {
+        _encoderWidth.value = width
+        _encoderHeight.value = height
+    }
+
     fun clear() {
         previewSurface = null
         previewSurfaceProvider = null
         cameraControl = null
         cameraInfo = null
+        _encoderWidth.value = 0
+        _encoderHeight.value = 0
     }
 }
