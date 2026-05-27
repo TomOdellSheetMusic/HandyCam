@@ -39,9 +39,20 @@ class CameraStateHolder @Inject constructor() {
     private val _encoderHeight = MutableStateFlow(0)
     val encoderHeight: StateFlow<Int> = _encoderHeight
 
+    private val _exposureMin = MutableStateFlow(0)
+    val exposureMin: StateFlow<Int> = _exposureMin
+
+    private val _exposureMax = MutableStateFlow(0)
+    val exposureMax: StateFlow<Int> = _exposureMax
+
     fun setEncoderSize(width: Int, height: Int) {
         _encoderWidth.value = width
         _encoderHeight.value = height
+    }
+
+    fun setExposureRange(min: Int, max: Int) {
+        _exposureMin.value = min
+        _exposureMax.value = max
     }
 
     fun clear() {
@@ -51,5 +62,7 @@ class CameraStateHolder @Inject constructor() {
         cameraInfo = null
         _encoderWidth.value = 0
         _encoderHeight.value = 0
+        _exposureMin.value = 0
+        _exposureMax.value = 0
     }
 }

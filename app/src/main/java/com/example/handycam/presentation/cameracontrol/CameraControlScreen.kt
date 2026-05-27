@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -66,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 @Composable
@@ -86,6 +88,10 @@ fun CameraControlScreen(
     val gridEnabled by viewModel.gridEnabled.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
     val useAvc by viewModel.useAvc.collectAsState()
+    val encoderWidth by viewModel.encoderWidth.collectAsState()
+    val encoderHeight by viewModel.encoderHeight.collectAsState()
+    val avcExposureMin by viewModel.exposureMin.collectAsState()
+    val avcExposureMax by viewModel.exposureMax.collectAsState()
 
     var showEvLabel by remember { mutableStateOf(false) }
     var focusRingVisible by remember { mutableStateOf(false) }
@@ -141,26 +147,73 @@ fun CameraControlScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (useAvc) {
-            AndroidView(
-                factory = { ctx ->
-                    SurfaceView(ctx).also { surfaceView ->
-                        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: SurfaceHolder) {
-                                viewModel.setPreviewSurface(holder.surface)
-                            }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val density = LocalDensity.current
+                val containerWidth = constraints.maxWidth.toFloat()
+                val containerHeight = constraints.maxHeight.toFloat()
+                val videoWidth = encoderWidth.toFloat().takeIf { it > 0f }
+                val videoHeight = encoderHeight.toFloat().takeIf { it > 0f }
 
-                            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                                viewModel.setPreviewSurface(holder.surface)
-                            }
-
-                            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                viewModel.setPreviewSurface(null)
-                            }
-                        })
+                val (viewWidth, viewHeight) = if (videoWidth != null && videoHeight != null
+                    && containerWidth > 0f && containerHeight > 0f
+                ) {
+                    val videoAspect = videoWidth / videoHeight
+                    val containerAspect = containerWidth / containerHeight
+                    if (videoAspect > containerAspect) {
+                        val h = containerHeight
+                        val w = h * videoAspect
+                        w to h
+                    } else {
+                        val w = containerWidth
+                        val h = w / videoAspect
+                        w to h
                     }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                } else {
+                    containerWidth to containerHeight
+                }
+
+                AndroidView(
+                    factory = { ctx ->
+                        SurfaceView(ctx).also { surfaceView ->
+                            surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) {
+                                    viewModel.setPreviewSurface(holder.surface)
+                                }
+
+                                override fun surfaceChanged(
+                                    holder: SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int
+                                ) {
+                                    viewModel.setPreviewSurface(holder.surface)
+                                }
+
+                                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                    viewModel.setPreviewSurface(null)
+                                }
+                            })
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(
+                            with(density) { viewWidth.toDp() },
+                            with(density) { viewHeight.toDp() }
+                        ),
+                    update = { view ->
+                        if (encoderWidth > 0 && encoderHeight > 0) {
+                            view.holder.setFixedSize(encoderWidth, encoderHeight)
+                        }
+                        val layoutParams = view.layoutParams
+                        if (layoutParams != null) {
+                            layoutParams.width = viewWidth.roundToInt().coerceAtLeast(1)
+                            layoutParams.height = viewHeight.roundToInt().coerceAtLeast(1)
+                            view.layoutParams = layoutParams
+                        }
+                    }
+                )
+            }
         } else {
             AndroidView(
                 factory = { ctx ->
@@ -225,10 +278,12 @@ fun CameraControlScreen(
                                             isDragging = true
                                             val range = viewModel.cameraStateHolder.cameraInfo
                                                 ?.exposureState?.exposureCompensationRange
-                                            if (range != null) {
-                                                val span = range.upper - range.lower
+                                            val minEv = range?.lower ?: avcExposureMin
+                                            val maxEv = range?.upper ?: avcExposureMax
+                                            if (minEv != 0 || maxEv != 0) {
+                                                val span = maxEv - minEv
                                                 val delta = ((dy / size.height) * span).toInt()
-                                                val newEv = (dragStartExposure + delta).coerceIn(range.lower, range.upper)
+                                                val newEv = (dragStartExposure + delta).coerceIn(minEv, maxEv)
                                                 viewModel.setExposure(newEv)
                                                 showEvLabel = true
                                             }

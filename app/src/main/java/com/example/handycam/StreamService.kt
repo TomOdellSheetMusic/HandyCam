@@ -179,6 +179,16 @@ class StreamService : LifecycleService() {
                 try { applyWhiteBalance(v) } catch (e: Exception) { Log.e(TAG, "applyWhiteBalance error", e) }
             }
         }
+        lifecycleScope.launch {
+            streamStateHolder.whiteBalanceLocked.collect {
+                try { updateCamera2Request() } catch (e: Exception) { Log.e(TAG, "awb lock update error", e) }
+            }
+        }
+        lifecycleScope.launch {
+            streamStateHolder.autoExposure.collect {
+                try { updateCamera2Request() } catch (e: Exception) { Log.e(TAG, "ae lock update error", e) }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -405,12 +415,11 @@ class StreamService : LifecycleService() {
                 } catch (_: Exception) {}
             }
             // White balance
-            val wbMode = if (!streamStateHolder.whiteBalanceLocked.value) {
-                CaptureRequest.CONTROL_AWB_MODE_AUTO
-            } else {
-                streamStateHolder.whiteBalance.value
-            }
+            val wbMode = streamStateHolder.whiteBalance.value
             try { b.set(CaptureRequest.CONTROL_AWB_MODE, wbMode) } catch (_: Exception) {}
+            val wbLock = streamStateHolder.whiteBalanceLocked.value &&
+                wbMode == CaptureRequest.CONTROL_AWB_MODE_AUTO
+            try { b.set(CaptureRequest.CONTROL_AWB_LOCK, wbLock) } catch (_: Exception) {}
 
             b.build()
         } catch (e: Exception) {
@@ -762,6 +771,7 @@ class StreamService : LifecycleService() {
         cameraStateHolder.cameraControl = null
         cameraStateHolder.cameraInfo = null
         cameraStateHolder.setEncoderSize(0, 0)
+        cameraStateHolder.setExposureRange(0, 0)
 
         try {
             // stop and release encoder after camera surfaces are torn down
@@ -1411,6 +1421,12 @@ class StreamService : LifecycleService() {
         var chosenHeight = reqHeight
         try {
             val chars = cameraManager?.getCameraCharacteristics(camId)
+            val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            if (exposureRange != null) {
+                cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper)
+            } else {
+                cameraStateHolder.setExposureRange(0, 0)
+            }
             // Camera2 output sizes are always in sensor (landscape) orientation.
             // Swap the requested dimensions so we find the right match.
             val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
