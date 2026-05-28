@@ -365,6 +365,7 @@ fun CameraControlScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
                 .statusBarsPadding()
                 .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -502,7 +503,6 @@ fun CameraControlScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
                     .navigationBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                     .verticalScroll(rememberScrollState()),
