@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.WindowInsets
@@ -215,7 +214,7 @@ fun CameraControlScreen(
                     },
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .requiredSize(
+                        .size(
                             with(density) { viewWidth.toDp() },
                             with(density) { viewHeight.toDp() }
                         ),
