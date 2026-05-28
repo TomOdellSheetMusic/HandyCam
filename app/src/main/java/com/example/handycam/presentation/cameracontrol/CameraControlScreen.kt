@@ -416,12 +416,14 @@ fun CameraControlScreen(
                     )
                 }
 
-                IconButton(onClick = { viewModel.setAutoFocus(!autoFocus) }) {
-                    Icon(
-                        imageVector = if (focusLockedUi) Icons.Filled.CenterFocusWeak else Icons.Filled.CenterFocusStrong,
-                        contentDescription = if (focusLockedUi) "Focus locked" else "Focus unlocked",
-                        tint = if (focusLockedUi) Color(0xFFFF5A5A) else Color.White
-                    )
+                if (useAvc) {
+                    IconButton(onClick = { viewModel.setAutoFocus(!autoFocus) }) {
+                        Icon(
+                            imageVector = if (focusLockedUi) Icons.Filled.CenterFocusWeak else Icons.Filled.CenterFocusStrong,
+                            contentDescription = if (focusLockedUi) "Focus locked" else "Focus unlocked",
+                            tint = if (focusLockedUi) Color(0xFFFF5A5A) else Color.White
+                        )
+                    }
                 }
 
                 IconButton(onClick = { viewModel.setWhiteBalanceLocked(!wbLockedUi) }) {
