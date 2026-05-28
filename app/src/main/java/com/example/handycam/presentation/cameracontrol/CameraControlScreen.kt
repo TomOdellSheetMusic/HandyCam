@@ -23,8 +23,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -211,7 +215,7 @@ fun CameraControlScreen(
                     },
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .size(
+                        .requiredSize(
                             with(density) { viewWidth.toDp() },
                             with(density) { viewHeight.toDp() }
                         ),
@@ -498,6 +502,7 @@ fun CameraControlScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
                     .navigationBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                     .verticalScroll(rememberScrollState()),
