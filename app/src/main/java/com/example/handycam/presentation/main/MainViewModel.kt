@@ -44,6 +44,22 @@ class MainViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { _availableCameras.value = getAvailableCamerasUseCase() }
+        viewModelScope.launch {
+            val settings = settingsRepository.appSettings.first()
+            streamStateHolder.setHost(settings.host)
+            streamStateHolder.setStreamingPort(settings.streamingPort)
+            streamStateHolder.setCamera(settings.camera)
+            streamStateHolder.setUseScreenCapture(settings.useScreenCapture)
+        }
+        viewModelScope.launch {
+            val config = settingsRepository.streamConfig.first()
+            streamStateHolder.setWidth(config.width)
+            streamStateHolder.setHeight(config.height)
+            streamStateHolder.setJpegQuality(config.jpegQuality)
+            streamStateHolder.setFps(config.fps)
+            streamStateHolder.setUseAvc(config.useAvc)
+            streamStateHolder.setAvcBitrate(config.avcBitrate ?: -1)
+        }
     }
 
     fun startStreaming(
@@ -92,6 +108,52 @@ class MainViewModel @Inject constructor(
                 action = "com.example.handycam.ACTION_STOP"
             })
         }
+    }
+
+    fun updateHost(host: String) {
+        streamStateHolder.setHost(host)
+        viewModelScope.launch { settingsRepository.updateHost(host) }
+    }
+
+    fun updateStreamingPort(port: Int) {
+        streamStateHolder.setStreamingPort(port)
+        viewModelScope.launch { settingsRepository.updateStreamingPort(port) }
+    }
+
+    fun updateCamera(camera: String) {
+        streamStateHolder.setCamera(camera)
+        viewModelScope.launch { settingsRepository.updateCamera(camera) }
+    }
+
+    fun updateResolution(width: Int, height: Int) {
+        streamStateHolder.setWidth(width)
+        streamStateHolder.setHeight(height)
+        viewModelScope.launch { settingsRepository.updateResolution(width, height) }
+    }
+
+    fun updateJpegQuality(quality: Int) {
+        streamStateHolder.setJpegQuality(quality)
+        viewModelScope.launch { settingsRepository.updateJpegQuality(quality) }
+    }
+
+    fun updateFps(fps: Int) {
+        streamStateHolder.setFps(fps)
+        viewModelScope.launch { settingsRepository.updateFps(fps) }
+    }
+
+    fun updateUseAvc(useAvc: Boolean) {
+        streamStateHolder.setUseAvc(useAvc)
+        viewModelScope.launch { settingsRepository.updateUseAvc(useAvc) }
+    }
+
+    fun updateAvcBitrate(bitrate: Int?) {
+        streamStateHolder.setAvcBitrate(bitrate ?: -1)
+        viewModelScope.launch { settingsRepository.updateAvcBitrate(bitrate) }
+    }
+
+    fun updateUseScreenCapture(useScreenCapture: Boolean) {
+        streamStateHolder.setUseScreenCapture(useScreenCapture)
+        viewModelScope.launch { settingsRepository.updateUseScreenCapture(useScreenCapture) }
     }
 
     fun startHttpsServer(port: Int) {

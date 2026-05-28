@@ -34,6 +34,7 @@ class PreferencesManager(private val context: Context) {
         val FPS = intPreferencesKey("fps")
         val USE_AVC = booleanPreferencesKey("use_avc")
         val AVC_BITRATE = intPreferencesKey("avc_bitrate")
+        val USE_SCREEN_CAPTURE = booleanPreferencesKey("use_screen_capture")
         val IS_STREAMING = booleanPreferencesKey("is_streaming")
         val HTTPS_RUNNING = booleanPreferencesKey("https_running")
     }
@@ -54,7 +55,8 @@ class PreferencesManager(private val context: Context) {
                 host = preferences[PreferenceKeys.HOST] ?: "0.0.0.0",
                 streamingPort = preferences[PreferenceKeys.STREAMING_PORT] ?: 4747,
                 camera = preferences[PreferenceKeys.CAMERA] ?: "back",
-                isStreaming = preferences[PreferenceKeys.IS_STREAMING] ?: false
+                isStreaming = preferences[PreferenceKeys.IS_STREAMING] ?: false,
+                useScreenCapture = preferences[PreferenceKeys.USE_SCREEN_CAPTURE] ?: false
             )
         }
 
@@ -71,10 +73,10 @@ class PreferencesManager(private val context: Context) {
         }
         .map { preferences ->
             StreamConfig(
-                width = preferences[PreferenceKeys.WIDTH] ?: 1080,
-                height = preferences[PreferenceKeys.HEIGHT] ?: 1920,
+                width = preferences[PreferenceKeys.WIDTH] ?: 1920,
+                height = preferences[PreferenceKeys.HEIGHT] ?: 1080,
                 jpegQuality = preferences[PreferenceKeys.JPEG_QUALITY] ?: 85,
-                fps = preferences[PreferenceKeys.FPS] ?: 60,
+                fps = preferences[PreferenceKeys.FPS] ?: 30,
                 useAvc = preferences[PreferenceKeys.USE_AVC] ?: false,
                 avcBitrate = preferences[PreferenceKeys.AVC_BITRATE]
             )
@@ -151,6 +153,12 @@ class PreferencesManager(private val context: Context) {
             } else {
                 preferences.remove(PreferenceKeys.AVC_BITRATE)
             }
+        }
+    }
+
+    suspend fun updateUseScreenCapture(useScreenCapture: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[PreferenceKeys.USE_SCREEN_CAPTURE] = useScreenCapture
         }
     }
 }

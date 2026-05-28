@@ -29,10 +29,6 @@ import android.media.projection.MediaProjectionManager
 
 private val FPS_OPTIONS = listOf("15", "30", "60")
 
-private val SCREEN_SOURCE = com.example.handycam.data.model.CameraInfo(
-    id = "screen", displayName = "Screen Share", facing = "screen"
-)
-
 private data class ResolutionPreset(val label: String, val width: Int, val height: Int)
 private val RESOLUTION_PRESETS = listOf(
     ResolutionPreset("720p", 1280, 720),
@@ -51,29 +47,46 @@ fun MainScreen(
     val httpsRunning by viewModel.httpsRunning.collectAsState()
     val cameras by viewModel.availableCameras.collectAsState()
     val isScreenStreaming by viewModel.streamStateHolder.useScreenCapture.collectAsState()
+    val hostValue by viewModel.streamStateHolder.host.collectAsState()
+    val streamingPort by viewModel.streamStateHolder.streamingPort.collectAsState()
+    val width by viewModel.streamStateHolder.width.collectAsState()
+    val height by viewModel.streamStateHolder.height.collectAsState()
+    val selectedCameraId by viewModel.streamStateHolder.camera.collectAsState()
+    val fpsValue by viewModel.streamStateHolder.fps.collectAsState()
+    val jpegQualityValue by viewModel.streamStateHolder.jpegQuality.collectAsState()
+    val useAvc by viewModel.streamStateHolder.useAvc.collectAsState()
+    val avcBitrateValue by viewModel.streamStateHolder.avcBitrate.collectAsState()
 
     val context = LocalContext.current
     val mediaProjectionManager = remember {
         context.getSystemService(MediaProjectionManager::class.java)
     }
 
-    var host by remember { mutableStateOf(viewModel.localIp) }
-    var port by remember { mutableStateOf("4747") }
-    var selectedPreset by remember { mutableStateOf(RESOLUTION_PRESETS[1]) } // default 1080p
-    var customWidth by remember { mutableStateOf("1920") }
-    var customHeight by remember { mutableStateOf("1080") }
-    var selectedCamera by remember(cameras) { mutableStateOf(cameras.firstOrNull()) }
-    var selectedFps by remember { mutableStateOf("30") }
-    var jpegQuality by remember { mutableFloatStateOf(85f) }
-    var avcBitrate by remember { mutableStateOf("") }
-    var useAvc by remember { mutableStateOf(false) }
+    val fallbackHost = if (hostValue == "0.0.0.0") viewModel.localIp else hostValue
+    var host by remember(hostValue, viewModel.localIp) { mutableStateOf(fallbackHost) }
+    var port by remember(streamingPort) { mutableStateOf(streamingPort.toString()) }
+    val matchingPreset = remember(width, height) {
+        RESOLUTION_PRESETS.firstOrNull { it.label != "Custom" && it.width == width && it.height == height }
+    }
+    var selectedPreset by remember { mutableStateOf(matchingPreset ?: RESOLUTION_PRESETS.last()) }
+    var customWidth by remember(width) { mutableStateOf(width.toString()) }
+    var customHeight by remember(height) { mutableStateOf(height.toString()) }
+    val selectedCamera = remember(cameras, selectedCameraId) {
+        cameras.firstOrNull { it.id == selectedCameraId }
+    }
+    val selectedFps = fpsValue.toString()
+    var jpegQuality by remember(jpegQualityValue) { mutableFloatStateOf(jpegQualityValue.toFloat()) }
+    var avcBitrate by remember(avcBitrateValue) {
+        mutableStateOf(if (avcBitrateValue > 0) (avcBitrateValue / 1_000_000f).toString() else "")
+    }
     var httpPort by remember { mutableStateOf("8080") }
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
-    var isScreenSource by remember { mutableStateOf(false) }
-    // Sync the toggle back to camera when streaming stops
-    LaunchedEffect(isStreaming) {
-        if (!isStreaming) isScreenSource = false
+    val isScreenSource = isScreenStreaming
+    LaunchedEffect(width, height) {
+        if (selectedPreset.label != "Custom") {
+            selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
+        }
     }
 
     // Capture resolved (w, h) once so the screen capture launcher can also use it
@@ -91,15 +104,17 @@ fun MainScreen(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val resolvedPort = port.toIntOrNull() ?: streamingPort
+            val resolvedAvcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() }
             viewModel.startStreaming(
                 host = host.ifBlank { "0.0.0.0" },
-                port = port.toIntOrNull() ?: 4747,
+                port = resolvedPort,
                 width = resolvedWidth, height = resolvedHeight,
                 camera = "screen",
                 jpegQuality = jpegQuality.toInt(),
-                fps = selectedFps.toIntOrNull() ?: 30,
+                fps = fpsValue,
                 useAvc = useAvc,
-                avcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() },
+                avcBitrate = resolvedAvcBitrate,
                 useScreenCapture = true,
                 mediaProjectionResultCode = result.resultCode,
                 mediaProjectionData = result.data
@@ -167,7 +182,11 @@ fun MainScreen(
                     }
                     OutlinedTextField(
                         value = port,
-                        onValueChange = { port = it },
+                        onValueChange = {
+                            port = it
+                            val parsedPort = it.toIntOrNull()
+                            if (parsedPort != null) viewModel.updateStreamingPort(parsedPort)
+                        },
                         label = { Text("Port") },
                         supportingText = { Text("4747") },
                         modifier = Modifier.weight(1f),
@@ -188,7 +207,17 @@ fun MainScreen(
                         SegmentedButton(
                             shape = SegmentedButtonDefaults.itemShape(i, RESOLUTION_PRESETS.size),
                             selected = selectedPreset == preset,
-                            onClick = { if (!isStreaming) selectedPreset = preset },
+                            onClick = {
+                                if (!isStreaming) {
+                                    selectedPreset = preset
+                                    if (preset.label != "Custom") {
+                                        viewModel.updateResolution(preset.width, preset.height)
+                                    } else {
+                                        customWidth = width.toString()
+                                        customHeight = height.toString()
+                                    }
+                                }
+                            },
                             label = { Text(preset.label) }
                         )
                     }
@@ -197,13 +226,29 @@ fun MainScreen(
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
-                            value = customWidth, onValueChange = { customWidth = it },
+                            value = customWidth,
+                            onValueChange = {
+                                customWidth = it
+                                val parsedWidth = it.toIntOrNull()
+                                val parsedHeight = customHeight.toIntOrNull()
+                                if (parsedWidth != null && parsedHeight != null) {
+                                    viewModel.updateResolution(parsedWidth, parsedHeight)
+                                }
+                            },
                             label = { Text("Width") }, modifier = Modifier.weight(1f),
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             enabled = !isStreaming
                         )
                         OutlinedTextField(
-                            value = customHeight, onValueChange = { customHeight = it },
+                            value = customHeight,
+                            onValueChange = {
+                                customHeight = it
+                                val parsedWidth = customWidth.toIntOrNull()
+                                val parsedHeight = it.toIntOrNull()
+                                if (parsedWidth != null && parsedHeight != null) {
+                                    viewModel.updateResolution(parsedWidth, parsedHeight)
+                                }
+                            },
                             label = { Text("Height") }, modifier = Modifier.weight(1f),
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             enabled = !isStreaming
@@ -221,7 +266,7 @@ fun MainScreen(
                         SegmentedButton(
                             shape = SegmentedButtonDefaults.itemShape(i, FPS_OPTIONS.size),
                             selected = selectedFps == fps,
-                            onClick = { if (!isStreaming) selectedFps = fps },
+                            onClick = { if (!isStreaming) viewModel.updateFps(fps.toInt()) },
                             label = { Text("${fps}fps") }
                         )
                     }
@@ -236,13 +281,20 @@ fun MainScreen(
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(0, 2),
                         selected = !isScreenSource,
-                        onClick = { if (!isStreaming) { isScreenSource = false; selectedCamera = cameras.firstOrNull() } },
+                        onClick = {
+                            if (!isStreaming) {
+                                viewModel.updateUseScreenCapture(false)
+                                if (selectedCamera == null) {
+                                    cameras.firstOrNull()?.let { viewModel.updateCamera(it.id) }
+                                }
+                            }
+                        },
                         label = { Text("Camera") }
                     )
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(1, 2),
                         selected = isScreenSource,
-                        onClick = { if (!isStreaming) { isScreenSource = true; selectedCamera = SCREEN_SOURCE } },
+                        onClick = { if (!isStreaming) viewModel.updateUseScreenCapture(true) },
                         label = { Text("Screen") }
                     )
                 }
@@ -267,7 +319,10 @@ fun MainScreen(
                             cameras.forEach { cam ->
                                 DropdownMenuItem(
                                     text = { Text(cam.displayName) },
-                                    onClick = { selectedCamera = cam; cameraDropdownOpen = false }
+                                    onClick = {
+                                        viewModel.updateCamera(cam.id)
+                                        cameraDropdownOpen = false
+                                    }
                                 )
                             }
                         }
@@ -281,13 +336,13 @@ fun MainScreen(
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(0, 2),
                         selected = !useAvc,
-                        onClick = { if (!isStreaming) useAvc = false },
+                        onClick = { if (!isStreaming) viewModel.updateUseAvc(false) },
                         label = { Text("MJPEG") }
                     )
                     SegmentedButton(
                         shape = SegmentedButtonDefaults.itemShape(1, 2),
                         selected = useAvc,
-                        onClick = { if (!isStreaming) useAvc = true },
+                        onClick = { if (!isStreaming) viewModel.updateUseAvc(true) },
                         label = { Text("H.264 (AVC)") }
                     )
                 }
@@ -301,14 +356,24 @@ fun MainScreen(
                         )
                         Slider(
                             value = jpegQuality,
-                            onValueChange = { if (!isStreaming) jpegQuality = it },
+                            onValueChange = {
+                                if (!isStreaming) {
+                                    jpegQuality = it
+                                    viewModel.updateJpegQuality(it.toInt())
+                                }
+                            },
                             valueRange = 10f..100f,
                             modifier = Modifier.weight(1f)
                         )
                     }
                 } else {
                     OutlinedTextField(
-                        value = avcBitrate, onValueChange = { avcBitrate = it },
+                        value = avcBitrate,
+                        onValueChange = {
+                            avcBitrate = it
+                            val parsed = it.toFloatOrNull()?.let { value -> (value * 1_000_000).toInt() }
+                            viewModel.updateAvcBitrate(parsed)
+                        },
                         label = { Text("Bitrate (Mbps)") },
                         supportingText = { Text("Leave blank for auto") },
                         modifier = Modifier.fillMaxWidth(), singleLine = true,
@@ -325,15 +390,18 @@ fun MainScreen(
                     else if (isScreenSource) {
                         screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
                     } else {
+                        val resolvedPort = port.toIntOrNull() ?: streamingPort
+                        val resolvedAvcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() }
+                        val resolvedCamera = selectedCamera?.id ?: cameras.firstOrNull()?.id ?: "back"
                         viewModel.startStreaming(
                             host = host.ifBlank { "0.0.0.0" },
-                            port = port.toIntOrNull() ?: 4747,
+                            port = resolvedPort,
                             width = resolvedWidth, height = resolvedHeight,
-                            camera = selectedCamera?.id ?: "back",
+                            camera = resolvedCamera,
                             jpegQuality = jpegQuality.toInt(),
-                            fps = selectedFps.toIntOrNull() ?: 30,
+                            fps = fpsValue,
                             useAvc = useAvc,
-                            avcBitrate = avcBitrate.toFloatOrNull()?.let { (it * 1_000_000).toInt() }
+                            avcBitrate = resolvedAvcBitrate
                         )
                     }
                 },

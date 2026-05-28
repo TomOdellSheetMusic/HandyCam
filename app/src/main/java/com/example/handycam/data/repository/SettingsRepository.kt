@@ -42,4 +42,7 @@ class SettingsRepository @Inject constructor(
     suspend fun updateUseAvc(useAvc: Boolean) = preferencesManager.updateUseAvc(useAvc)
     
     suspend fun updateAvcBitrate(bitrate: Int?) = preferencesManager.updateAvcBitrate(bitrate)
+
+    suspend fun updateUseScreenCapture(useScreenCapture: Boolean) =
+        preferencesManager.updateUseScreenCapture(useScreenCapture)
 }

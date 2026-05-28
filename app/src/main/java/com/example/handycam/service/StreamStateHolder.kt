@@ -30,10 +30,10 @@ class StreamStateHolder @Inject constructor() {
     private val _host = MutableStateFlow("0.0.0.0")
     val host: StateFlow<String> = _host.asStateFlow()
 
-    private val _width = MutableStateFlow(1080)
+    private val _width = MutableStateFlow(1920)
     val width: StateFlow<Int> = _width.asStateFlow()
 
-    private val _height = MutableStateFlow(1920)
+    private val _height = MutableStateFlow(1080)
     val height: StateFlow<Int> = _height.asStateFlow()
 
     private val _fps = MutableStateFlow(30)
