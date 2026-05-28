@@ -2,6 +2,7 @@ package com.example.handycam.presentation.cameracontrol
 
 import android.content.Context
 import android.content.Intent
+import androidx.camera.core.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.handycam.StreamService
@@ -22,6 +23,9 @@ class CameraControlViewModel @Inject constructor(
     val cameraStateHolder: CameraStateHolder,
     private val getAvailableCamerasUseCase: GetAvailableCamerasUseCase,
 ) : ViewModel() {
+
+    @Volatile
+    private var previewProviderToken: Long = 0L
 
     val isStreaming: StateFlow<Boolean> = streamStateHolder.isStreaming
     val torchEnabled: StateFlow<Boolean> = streamStateHolder.torchEnabled
@@ -141,11 +145,29 @@ class CameraControlViewModel @Inject constructor(
         })
     }
 
-    fun setPreviewSurfaceProvider(provider: androidx.camera.core.Preview.SurfaceProvider?) {
+    fun setPreviewSurfaceProvider(provider: Preview.SurfaceProvider?): Long {
+        val token = if (provider != null) {
+            previewProviderToken += 1
+            previewProviderToken
+        } else {
+            previewProviderToken
+        }
         cameraStateHolder.previewSurfaceProvider = provider
         context.startService(Intent(context, StreamService::class.java).apply {
             action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
             putExtra("surfaceToken", if (provider != null) "camerax_preview" else null as String?)
+        })
+        return token
+    }
+
+    fun clearPreviewSurfaceProvider(expected: Preview.SurfaceProvider?, token: Long) {
+        val matches = cameraStateHolder.previewSurfaceProvider === expected
+        val tokenMatches = token == previewProviderToken
+        if (!matches || !tokenMatches) return
+        cameraStateHolder.previewSurfaceProvider = null
+        context.startService(Intent(context, StreamService::class.java).apply {
+            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            putExtra("surfaceToken", null as String?)
         })
     }
 

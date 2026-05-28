@@ -53,8 +53,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -98,6 +100,7 @@ fun CameraControlScreen(
     var focusRingOffset by remember { mutableStateOf(Offset.Zero) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var showZoomLabel by remember { mutableStateOf(false) }
+    var previewProviderToken by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(showZoomLabel) { if (showZoomLabel) { delay(1500); showZoomLabel = false } }
 
@@ -139,7 +142,18 @@ fun CameraControlScreen(
 
     DisposableEffect(useAvc) {
         onDispose {
-            if (useAvc) viewModel.setPreviewSurface(null) else viewModel.setPreviewSurfaceProvider(null)
+            if (useAvc) viewModel.setPreviewSurface(null)
+        }
+    }
+
+    val currentProvider by rememberUpdatedState(previewViewRef?.surfaceProvider)
+    val currentToken by rememberUpdatedState(previewProviderToken)
+    val currentUseAvc by rememberUpdatedState(useAvc)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!currentUseAvc) {
+                viewModel.clearPreviewSurfaceProvider(currentProvider, currentToken)
+            }
         }
     }
 
@@ -219,7 +233,12 @@ fun CameraControlScreen(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
                         previewViewRef = previewView
-                        viewModel.setPreviewSurfaceProvider(previewView.surfaceProvider)
+                        previewProviderToken = viewModel.setPreviewSurfaceProvider(previewView.surfaceProvider)
+                    }
+                },
+                update = { previewView ->
+                    if (!useAvc) {
+                        previewProviderToken = viewModel.setPreviewSurfaceProvider(previewView.surfaceProvider)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -509,9 +528,6 @@ fun CameraControlScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { viewModel.setPreviewSurfaceProvider(null) }
-    }
 }
 
 @Composable
