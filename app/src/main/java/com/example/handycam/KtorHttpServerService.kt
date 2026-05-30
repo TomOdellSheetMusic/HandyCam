@@ -39,14 +39,14 @@ private const val ACTION_START_SERVER = "com.example.handycam.ACTION_START_HTTPS
 private const val ACTION_STOP_SERVER = "com.example.handycam.ACTION_STOP_HTTPS_SERVER"
 
 /**
- * Foreground service that runs a Ktor HTTPS server.
- * The server runs on a specified port with SSL/TLS encryption.
+ * Foreground service that runs a Ktor HTTP server.
+ * The server runs on a specified port.
  */
 @dagger.hilt.android.AndroidEntryPoint
-class KtorHttpsServerService : LifecycleService() {
+class KtorHttpServerService : LifecycleService() {
     
     private var server: NettyApplicationEngine? = null
-    private var httpPort = 8443
+    private var httpPort = 8080
     private var isRunning = false
     @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
     
@@ -105,7 +105,7 @@ class KtorHttpsServerService : LifecycleService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = Intent(this, KtorHttpsServerService::class.java).apply {
+        val stopIntent = Intent(this, KtorHttpServerService::class.java).apply {
             action = ACTION_STOP_SERVER
         }
         val stopPending = PendingIntent.getService(
@@ -190,7 +190,7 @@ class KtorHttpsServerService : LifecycleService() {
                     <body>
                         <div class="container">
                             <h1>HandyCam</h1>
-                            <p>HTTPS Control Server</p>
+                            <p>HTTP Control Server</p>
                             <div class="card">
                                 <div class="card-title">Web UI</div>
                                 <a href="/camera">Open Camera Control</a>
@@ -242,7 +242,7 @@ class KtorHttpsServerService : LifecycleService() {
             
             get("/info") {
                 call.respond(ServerInfo(
-                    name = "HandyCam HTTPS Server",
+                    name = "HandyCam HTTP Server",
                     version = "1.0.0",
                     protocol = "HTTP/1.1"
                 ))
@@ -278,7 +278,7 @@ class KtorHttpsServerService : LifecycleService() {
                 list.add(CameraListItem("front", "front", "front", ""))
 
                 try {
-                    val cm = this@KtorHttpsServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val cm = this@KtorHttpServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
                     cm.cameraIdList.forEach { id ->
                         try {
                             val chars = cm.getCameraCharacteristics(id)
@@ -322,7 +322,7 @@ class KtorHttpsServerService : LifecycleService() {
                             }
                             notifManager.createNotificationChannel(channel)
                         }
-                        val openIntent = Intent(this@KtorHttpsServerService, MainActivity::class.java).apply {
+                        val openIntent = Intent(this@KtorHttpServerService, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                         }
                         // Ensure the Intent is explicit about the target component and package
@@ -331,12 +331,12 @@ class KtorHttpsServerService : LifecycleService() {
                         // include streaming port so MainActivity can handle a deferred start
                         openIntent.putExtra("streamingPort", streamStateHolder.streamingPort.value)
                         val openPending = PendingIntent.getActivity(
-                            this@KtorHttpsServerService,
+                            this@KtorHttpServerService,
                             100,
                             openIntent,
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                         )
-                        val notif = NotificationCompat.Builder(this@KtorHttpsServerService, notifChannelId)
+                        val notif = NotificationCompat.Builder(this@KtorHttpServerService, notifChannelId)
                             .setContentTitle("HandyCam: Action Required")
                             .setContentText("Tap to open app and start streaming")
                             .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -357,7 +357,7 @@ class KtorHttpsServerService : LifecycleService() {
                         return@post
                     }
 
-                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                    val intent = Intent(this@KtorHttpServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_START"
                         putExtra("host", streamStateHolder.host.value)
                         putExtra("streamingPort", streamStateHolder.streamingPort.value)
@@ -379,7 +379,7 @@ class KtorHttpsServerService : LifecycleService() {
             
             post("/api/camera/stop") {
                 try {
-                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                    val intent = Intent(this@KtorHttpServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_STOP"
                     }
                     startService(intent)
@@ -394,7 +394,7 @@ class KtorHttpsServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, String>>()
                     val camera = params["camera"] ?: "back"
-                    val intent = Intent(this@KtorHttpsServerService, StreamService::class.java).apply {
+                    val intent = Intent(this@KtorHttpServerService, StreamService::class.java).apply {
                         action = "com.example.handycam.ACTION_SET_CAMERA"
                         putExtra("camera", camera)
                     }
@@ -522,7 +522,7 @@ class KtorHttpsServerService : LifecycleService() {
             get("/camera") {
                 // Serve HTML from assets for easier editing and caching
                 try {
-                    val html = this@KtorHttpsServerService.assets.open("camera_control.html").bufferedReader().use { it.readText() }
+                    val html = this@KtorHttpServerService.assets.open("camera_control.html").bufferedReader().use { it.readText() }
                     call.respondText(html, ContentType.Text.Html)
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, "Failed to load camera UI: ${e.message}")

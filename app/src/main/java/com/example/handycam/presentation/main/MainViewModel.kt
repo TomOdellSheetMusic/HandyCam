@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.handycam.KtorHttpsServerService
+import com.example.handycam.KtorHttpServerService
 import com.example.handycam.StreamService
 import com.example.handycam.data.model.CameraInfo
 import com.example.handycam.data.model.StreamConfig
@@ -157,7 +157,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun startHttpsServer(port: Int) {
-        val intent = Intent(context, KtorHttpsServerService::class.java).apply {
+        val intent = Intent(context, KtorHttpServerService::class.java).apply {
             action = "com.example.handycam.ACTION_START_HTTPS_SERVER"
             putExtra("httpPort", port)
         }
@@ -165,7 +165,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun stopHttpsServer() {
-        context.startService(Intent(context, KtorHttpsServerService::class.java).apply {
+        context.startService(Intent(context, KtorHttpServerService::class.java).apply {
             action = "com.example.handycam.ACTION_STOP_HTTPS_SERVER"
         })
     }

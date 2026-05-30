@@ -40,7 +40,7 @@
             android:exported="false"
             android:foregroundServiceType="camera|mediaProjection|microphone" />
         <service
-            android:name=".KtorHttpsServerService"
+            android:name=".KtorHttpServerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
     </application>
