@@ -16,6 +16,9 @@ import com.example.handycam.data.model.api.CameraListItem
 import com.example.handycam.data.model.api.CameraStatusResponse
 import com.example.handycam.data.model.api.ServerInfo
 import com.example.handycam.data.model.api.ServerStatus
+import com.example.handycam.service.StreamStateHolder
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.application.*
@@ -42,13 +45,13 @@ private const val ACTION_STOP_SERVER = "com.example.handycam.ACTION_STOP_HTTPS_S
  * Foreground service that runs a Ktor HTTP server.
  * The server runs on a specified port.
  */
-@dagger.hilt.android.AndroidEntryPoint
+@AndroidEntryPoint
 class KtorHttpServerService : LifecycleService() {
     
     private var server: NettyApplicationEngine? = null
     private var httpPort = 8080
     private var isRunning = false
-    @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
+    @Inject lateinit var streamStateHolder: StreamStateHolder
     
     private var startTime: Long = 0
 

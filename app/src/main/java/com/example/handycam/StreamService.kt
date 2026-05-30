@@ -22,6 +22,10 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import com.example.handycam.service.CameraStateHolder
+import com.example.handycam.service.StreamStateHolder
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
@@ -64,7 +68,7 @@ private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
 private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
 private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
 
-@dagger.hilt.android.AndroidEntryPoint
+@AndroidEntryPoint
 class StreamService : LifecycleService() {
     // AVC needs a deeper queue to absorb I-frame bursts without dropping reference frames.
     // MJPEG only ever needs the latest frame, but we share one queue so use the larger size.
@@ -142,8 +146,8 @@ class StreamService : LifecycleService() {
     // mDNS / NSD for DroidCam OBS plugin discovery
     private var mdnsResponder: MdnsResponder? = null
 
-    @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
-    @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
+    @Inject lateinit var streamStateHolder: StreamStateHolder
+    @Inject lateinit var cameraStateHolder: CameraStateHolder
 
     override fun onCreate() {
         super.onCreate()
