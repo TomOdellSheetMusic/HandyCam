@@ -33,21 +33,22 @@ Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/dr
 - Squash Bugs
 
 ## Build Instructions
-The easiest way to get going is to download and install [Android Studio](https://developer.android.com/studio) and use its inbuilt Version Control to clone/fork/ the HandyCam Repository. This should just work out of the box. Alternatively, you can use VSCode and download the Android and JAVA JDKs into a folder and create environment variables for example:
+The easiest way to get going is to download and install [Android Studio](https://developer.android.com/studio) and use its inbuilt Version Control to clone/fork the HandyCam Repository. This should just work out of the box. Alternatively, you can use an IDE like VSCode and download the Android and JAVA JDKs separately. Then you need to point your system to them, for example:
 
 ```
 [Environment]::SetEnvironmentVariable(
   "JAVA_HOME",
-  "C:\Your\Path\TO\Java\jdk-17.0.2",
+  "C:\Your\Path\To\Java\jdk-17.0.2",
   "User"
 )
 
 [Environment]::SetEnvironmentVariable(
   "ANDROID_HOME",
-  "C:\You\Path\to\android-sdk",
+  "C:\You\Path\To\android-sdk",
   "User"
 )       
 ```
+and you should be able to run ./gradlew.bat. 
 
 ## License
 
