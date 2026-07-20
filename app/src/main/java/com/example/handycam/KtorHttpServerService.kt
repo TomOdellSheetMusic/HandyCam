@@ -229,6 +229,10 @@ class KtorHttpServerService : LifecycleService() {
                                     <span class="method">POST</span><span class="path">/api/camera/switch</span>
                                     <span class="desc">Switch camera — body: {"camera": "back|front"}</span>
                                 </div>
+                                <div class="endpoint">
+                                    <span class="method">POST</span><span class="path">/api/settings/zoom</span>
+                                    <span class="desc">Set zoom level — body: {"zoom": 0.0-1.0}</span>
+                                </div>
                             </div>
                         </div>
                     </body>
@@ -271,6 +275,8 @@ class KtorHttpServerService : LifecycleService() {
                     fps = (streamStateHolder.fps.value),
                     jpegQuality = (streamStateHolder.jpegQuality.value),
                     useAvc = (streamStateHolder.useAvc.value),
+                    zoom = (streamStateHolder.zoom.value),
+                    zoomLocked = (streamStateHolder.zoomLocked.value),
                     torchEnabled = (streamStateHolder.torchEnabled.value),
                     autoFocus = (streamStateHolder.autoFocus.value),
                     exposure = (streamStateHolder.exposure.value),
@@ -502,6 +508,23 @@ class KtorHttpServerService : LifecycleService() {
                     call.respond(ApiResponse(true, "Exposure updated to $exposure"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid exposure value: ${e.message}"))
+                }
+            }
+
+            post("/api/settings/zoom") {
+                try {
+                    val params = call.receive<Map<String, Double>>()
+                    val normalizedZoom = when {
+                        params.containsKey("zoomPercent") -> ((params["zoomPercent"] ?: 0.0) / 100.0).toFloat()
+                        params.containsKey("linearZoom") -> (params["linearZoom"] ?: 0.0).toFloat()
+                        params.containsKey("zoom") -> (params["zoom"] ?: 0.0).toFloat()
+                        else -> throw IllegalArgumentException("Missing zoom value")
+                    }.coerceIn(0f, 1f)
+
+                    streamStateHolder.setZoom(normalizedZoom)
+                    call.respond(ApiResponse(true, "Zoom updated to ${"%.0f".format(normalizedZoom * 100)}%"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid zoom value: ${e.message}"))
                 }
             }
 

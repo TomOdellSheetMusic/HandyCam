@@ -26,6 +26,8 @@ data class CameraStatusResponse(
     val fps: Int,
     val jpegQuality: Int,
     val useAvc: Boolean,
+    val zoom: Float,
+    val zoomLocked: Boolean,
     val torchEnabled: Boolean,
     val autoFocus: Boolean,
     val exposure: Int,

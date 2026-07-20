@@ -1551,12 +1551,15 @@ class StreamService : LifecycleService() {
                                 captureSession = session
                                 sessionSurfaces = targets.toList() // snapshot for safe request rebuilding
                                 try {
-                                    val reqBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                                    targets.forEach { reqBuilder.addTarget(it) }
-                                    reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                                    reqBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                                    
-                                    session.setRepeatingRequest(reqBuilder.build(), null, cameraHandler)
+                                    val request = buildCamera2Request(camera) ?: run {
+                                        val reqBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                                        targets.forEach { reqBuilder.addTarget(it) }
+                                        reqBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                                        reqBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                        reqBuilder.build()
+                                    }
+
+                                    session.setRepeatingRequest(request, null, cameraHandler)
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
                                     
                                     // Notify that camera is ready
@@ -1715,6 +1718,7 @@ class StreamService : LifecycleService() {
             return
         }
         selectedCamera = newCam
+        streamStateHolder.setZoom(0f)
 
         if (useAvc) {
             // For AVC path, stop camera session but keep encoder surface, then reopen camera
@@ -1722,6 +1726,7 @@ class StreamService : LifecycleService() {
                 stopCamera2(releaseEncoderSurface = false)
                 // restart Camera2 session using existing encoder surface
                 startCamera2ToEncoder(requestedWidth, requestedHeight, targetFps)
+                cameraHandler?.post { updateCamera2Request() }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to switch Camera2 camera", e)
             }
@@ -1752,7 +1757,10 @@ class StreamService : LifecycleService() {
                     previewUseCase?.let { useCases.add(it) }
                     
                     if (useCases.isNotEmpty()) {
-                        provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                        val camera = provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                        cameraStateHolder.cameraControl = camera.cameraControl
+                        cameraStateHolder.cameraInfo = camera.cameraInfo
+                        try { cameraStateHolder.cameraControl?.setLinearZoom(0f) } catch (_: Exception) {}
                         Log.i(TAG, "Switched CameraX binding to $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     }
                 } catch (e: Exception) {
@@ -1891,7 +1899,9 @@ class StreamService : LifecycleService() {
             previewUseCase?.let { useCases.add(it) }
             
             if (useCases.isNotEmpty()) {
-                provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                val camera = provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+                cameraStateHolder.cameraControl = camera.cameraControl
+                cameraStateHolder.cameraInfo = camera.cameraInfo
                 Log.i(TAG, "CameraX rebound with ${useCases.size} use cases")
             }
         } catch (e: Exception) {

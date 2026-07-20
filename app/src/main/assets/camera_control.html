@@ -253,6 +253,15 @@
             </div>
         </div>
 
+        <div class="card" id="zoomCard">
+            <div class="card-title">Zoom</div>
+            <div class="control-row">
+                <label>Zoom</label>
+                <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)">
+                <span class="val-label"><span id="zoomValue">0</span>%</span>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-title">Controls</div>
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
@@ -331,6 +340,10 @@
 
                 document.getElementById('jpegSlider').value = data.jpegQuality;
                 document.getElementById('jpegValue').textContent = data.jpegQuality;
+
+                const zoomPercent = Math.round((data.zoom || 0) * 100);
+                document.getElementById('zoomSlider').value = zoomPercent;
+                document.getElementById('zoomValue').textContent = zoomPercent;
 
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
@@ -439,7 +452,7 @@
                 });
                 const data = await response.json();
                 showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 500);
+                if (data.success) setTimeout(() => { checkStatus(); checkCameraSettings(); }, 500);
             } catch (e) {
                 showMessage('Failed to switch camera: ' + e.message, false);
             }
@@ -556,6 +569,21 @@
                 if (!data.success) showMessage(data.message, false);
             } catch (e) {
                 showMessage('Failed to set exposure: ' + e.message, false);
+            }
+        }
+
+        async function setZoom(zoomPercent) {
+            document.getElementById('zoomValue').textContent = zoomPercent;
+            try {
+                const response = await fetch('/api/settings/zoom', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ zoomPercent: parseFloat(zoomPercent) })
+                });
+                const data = await response.json();
+                if (!data.success) showMessage(data.message, false);
+            } catch (e) {
+                showMessage('Failed to set zoom: ' + e.message, false);
             }
         }
 
