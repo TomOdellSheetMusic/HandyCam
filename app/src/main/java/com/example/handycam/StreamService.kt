@@ -19,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -394,25 +395,31 @@ class StreamService : LifecycleService() {
 
             // Zoom
             val zoom = streamStateHolder.zoom.value
-            if (zoom > 0f) {
-                try {
-                    val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
-                    val maxZoom = chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-                    val zoomRatio = 1f + zoom * (maxZoom - 1f)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
-                    } else {
-                        val sensor = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
-                        if (sensor != null) {
-                            val cx = sensor.width() / 2; val cy = sensor.height() / 2
-                            val hw = (sensor.width() / (2f * zoomRatio)).toInt()
-                            val hh = (sensor.height() / (2f * zoomRatio)).toInt()
-                            b.set(CaptureRequest.SCALER_CROP_REGION,
-                                android.graphics.Rect(cx - hw, cy - hh, cx + hw, cy + hh))
-                        }
+            try {
+                val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
+                val zoomRange = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                } else {
+                    null
+                }
+
+                val minZoom = zoomRange?.lower ?: 1f
+                val maxZoom = zoomRange?.upper ?: (chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f)
+                val zoomRatio = minZoom + zoom.coerceIn(0f, 1f) * (maxZoom - minZoom)
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
+                } else {
+                    val sensor = chars?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                    if (sensor != null && zoomRatio > 1f) {
+                        val cx = sensor.width() / 2; val cy = sensor.height() / 2
+                        val hw = (sensor.width() / (2f * zoomRatio)).toInt()
+                        val hh = (sensor.height() / (2f * zoomRatio)).toInt()
+                        b.set(CaptureRequest.SCALER_CROP_REGION,
+                            android.graphics.Rect(cx - hw, cy - hh, cx + hw, cy + hh))
                     }
-                } catch (_: Exception) {}
-            }
+                }
+            } catch (_: Exception) {}
             // White balance
             val wbMode = streamStateHolder.whiteBalance.value
             try { b.set(CaptureRequest.CONTROL_AWB_MODE, wbMode) } catch (_: Exception) {}
@@ -1651,45 +1658,29 @@ class StreamService : LifecycleService() {
                 else -> {} // Unknown facing
             }
             
-            // If we have focal length info, try to filter for matching focal length
-            if (targetFocalLengths.isNotEmpty()) {
-                selectorBuilder.addCameraFilter { availableCameras ->
-                    availableCameras.filter { cameraInfo ->
-                        try {
-                            // Try to match by inspecting if this camera has matching focal lengths
-                            // CameraX provides CameraInfo; we need to check its characteristics
-                            // In CameraX 1.5.1, we can use introspection to get Camera2 info
-                            
-                            // Get the Camera2 CameraCharacteristics through reflection if possible
-                            val cameraId2 = try {
-                                // Try to get camera ID from CameraInfo using reflection
-                                val getCameraIdMethod = cameraInfo.javaClass.getMethod("getCameraId")
-                                getCameraIdMethod.invoke(cameraInfo) as? String
-                            } catch (e: Exception) {
-                                null
-                            }
-                            
-                            if (cameraId2 != null) {
-                                // We got the camera ID - check if focal lengths match
-                                val chars2 = mgr.getCameraCharacteristics(cameraId2)
-                                val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                                    ?.take(1)
-                                    ?.toList() ?: emptyList()
-                                
-                                // Match if we have similar focal lengths (with small tolerance for floating point)
-                                focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
-                                    focal2.any { f2 ->
-                                        kotlin.math.abs(f2 - targetFocal) < 0.1f
-                                    }
-                                }
-                            } else {
-                                // Can't get camera ID, include this camera (will match first)
-                                true
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Error matching focal length in camera filter", e)
-                            true  // Include if we can't determine
+            // Try to find a CameraX camera that matches the requested Camera2 ID
+            selectorBuilder.addCameraFilter { availableCameras ->
+                availableCameras.filter { cameraInfo ->
+                    try {
+                        val cameraId2 = Camera2CameraInfo.from(cameraInfo).cameraId
+                        if (cameraId2 == cameraId) {
+                            return@filter true
                         }
+                        
+                        // Fallback: Match if we have similar focal lengths (with small tolerance for floating point)
+                        val chars2 = mgr.getCameraCharacteristics(cameraId2)
+                        val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                            ?.take(1)
+                            ?.toList() ?: emptyList()
+                        
+                        focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
+                            focal2.any { f2 ->
+                                kotlin.math.abs(f2 - targetFocal) < 0.1f
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error matching camera in filter", e)
+                        false
                     }
                 }
             }

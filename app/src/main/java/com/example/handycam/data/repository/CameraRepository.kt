@@ -35,13 +35,27 @@ class CameraRepository @Inject constructor(
                 }
                 
                 val focalLengths = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                val focalLengthStr = focalLengths?.firstOrNull()?.let { "%.1fmm".format(it) }
+                val focalLength = focalLengths?.firstOrNull()
+                val focalLengthStr = focalLength?.let { "%.1fmm".format(it) }
+                val megapixels = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)?.let { size ->
+                    val mp = (size.width * size.height).toDouble() / 1_000_000.0
+                    "%.1fMP".format(mp)
+                }
+                val cameraLabel = listOfNotNull(focalLengthStr, megapixels).joinToString(" • ")
+                
+                val name = when {
+                    facing == "front" -> "Front"
+                    facing == "external" -> "External"
+                    focalLength != null && focalLength < 3.0f -> "Ultrawide"
+                    focalLength != null && focalLength > 10.0f -> "Telephoto"
+                    else -> "Main Wide"
+                }
                 
                 CameraInfo(
                     id = cameraId,
-                    displayName = "$facing ($cameraId)",
+                    displayName = "$name ${cameraLabel}".trim(),
                     facing = facing,
-                    focalLength = focalLengthStr
+                    focalLength = cameraLabel.ifEmpty { null }
                 )
             }
         } catch (e: Exception) {
