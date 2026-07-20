@@ -142,7 +142,15 @@ class KtorHttpServerService : LifecycleService() {
                 isRunning = true
 
                 launch(Dispatchers.Main) {
-                    startForeground(NOTIF_ID, buildNotification("Running on port $httpPort"))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(
+                            NOTIF_ID,
+                            buildNotification("Running on port $httpPort"),
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        )
+                    } else {
+                        startForeground(NOTIF_ID, buildNotification("Running on port $httpPort"))
+                    }
                     broadcastServerState(true)
                 }
 
