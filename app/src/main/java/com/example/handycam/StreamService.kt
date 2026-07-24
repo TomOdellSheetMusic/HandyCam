@@ -69,7 +69,9 @@ private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_
 class StreamService : LifecycleService() {
     // AVC needs a deeper queue to absorb I-frame bursts without dropping reference frames.
     // MJPEG only ever needs the latest frame, but we share one queue so use the larger size.
-    private val frameQueue = LinkedBlockingQueue<ByteArray>(16)
+    private data class TimedFrame(val data: ByteArray, val ptsUs: Long)
+
+    private val frameQueue = LinkedBlockingQueue<TimedFrame>(16)
     private var encoderDroppedFrames = 0
     private var serverThread: Thread? = null
     private var running = false
@@ -119,13 +121,23 @@ class StreamService : LifecycleService() {
     private var screenCaptureHandler: Handler? = null
 
     // Audio capture + AAC encode fields
-    private val audioFrameQueue = LinkedBlockingQueue<ByteArray>(8)
+    private val audioFrameQueue = ArrayBlockingQueue<TimedFrame>(8)
     private var audioConfig: ByteArray? = null
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: MediaCodec? = null
     private var audioEncoderInputThread: Thread? = null
     private var audioEncoderOutputThread: Thread? = null
     @Volatile private var audioRunning = false
+
+    private var streamStartTime = -1L
+
+    private fun getStreamRelativeTimeUs(): Long {
+        val now = SystemClock.elapsedRealtimeNanos() / 1000L
+        if (streamStartTime == -1L) {
+            streamStartTime = now
+        }
+        return now - streamStartTime
+    }
 
     private companion object {
         const val AUDIO_SAMPLE_RATE = 44100
@@ -591,6 +603,7 @@ class StreamService : LifecycleService() {
     private fun startStreaming(bindHost: String, port: Int, width: Int, height: Int, camera: String, jpegQ: Int, fps: Int, useAvcFlag: Boolean, screenCapture: Boolean = false, mpResultCode: Int = 0, mpData: Intent? = null) {
         if (running) return
         running = true
+        streamStartTime = -1L
         // Always stream in landscape — swap if portrait dimensions were passed
         requestedWidth = width
         requestedHeight = height
@@ -848,9 +861,10 @@ class StreamService : LifecycleService() {
                 finalBitmap.recycle()
 
                 val jpeg = baos.toByteArray()
-                if (!frameQueue.offer(jpeg)) {
+                val ptsUs = getStreamRelativeTimeUs()
+                if (!frameQueue.offer(TimedFrame(jpeg, ptsUs))) {
                     frameQueue.poll()
-                    frameQueue.offer(jpeg)
+                    frameQueue.offer(TimedFrame(jpeg, ptsUs))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Screen capture frame error", e)
@@ -971,10 +985,11 @@ class StreamService : LifecycleService() {
                                 avcConfig = outBytes
                                 Log.i(TAG, "Saved AVC config size=${outBytes.size}")
                             } else {
-                                if (!frameQueue.offer(outBytes)) {
+                                val ptsUs = getStreamRelativeTimeUs()
+                                if (!frameQueue.offer(TimedFrame(outBytes, ptsUs))) {
                                     // queue is full: drop the oldest frame to keep latest
                                     frameQueue.poll()
-                                    if (!frameQueue.offer(outBytes)) {
+                                    if (!frameQueue.offer(TimedFrame(outBytes, ptsUs))) {
                                         // if still failing, count drops for diagnostics
                                         encoderDroppedFrames++
                                         if (encoderDroppedFrames % 50 == 0) {
@@ -1102,10 +1117,11 @@ class StreamService : LifecycleService() {
                 // use configured jpegQuality, clamp to reasonable range
                 yuvImage.compressToJpeg(Rect(0, 0, width, height), jpegQuality.coerceIn(10, 100), baos)
                 val jpeg = baos.toByteArray()
+                val ptsUs = getStreamRelativeTimeUs()
 
-                if (!frameQueue.offer(jpeg)) {
+                if (!frameQueue.offer(TimedFrame(jpeg, ptsUs))) {
                     frameQueue.poll()
-                    frameQueue.offer(jpeg)
+                    frameQueue.offer(TimedFrame(jpeg, ptsUs))
                 }
             }
 
@@ -1184,20 +1200,20 @@ class StreamService : LifecycleService() {
                         // skipping P-frames causes the decoder to lose reference frames → macroblocking.
                         // Only throttle for MJPEG where each frame is fully independent.
                         if (!isAvcClient) {
-                            val now = System.currentTimeMillis()
+                            val now = getStreamRelativeTimeUs()
                             if (now - lastSent < intervalMs) {
                                 continue
                             }
                         }
 
-                        val pts = System.currentTimeMillis()
+                        val pts = frame.ptsUs
                         val header = ByteBuffer.allocate(12)
                         header.putLong(pts)
-                        header.putInt(frame.size)
+                        header.putInt(frame.data.size)
 
                         try {
                             out.write(header.array())
-                            out.write(frame)
+                            out.write(frame.data)
                             out.flush()
                             lastSent = pts
                         } catch (se: java.net.SocketException) {
@@ -1298,7 +1314,7 @@ class StreamService : LifecycleService() {
                         val inBuf = encoder.getInputBuffer(idx) ?: continue
                         inBuf.clear()
                         inBuf.put(pcm, 0, read)
-                        encoder.queueInputBuffer(idx, 0, read, System.nanoTime() / 1000, 0)
+                        encoder.queueInputBuffer(idx, 0, read, android.os.SystemClock.elapsedRealtimeNanos() / 1000, 0)
                     }
                 }
             }.also { it.start() }
@@ -1318,9 +1334,10 @@ class StreamService : LifecycleService() {
                             audioConfig = bytes
                             Log.i(TAG, "Got AAC config: ${bytes.size} bytes")
                         } else if (bytes.isNotEmpty()) {
-                            if (!audioFrameQueue.offer(bytes)) {
+                            val ptsUs = getStreamRelativeTimeUs()
+                            if (!audioFrameQueue.offer(TimedFrame(bytes, ptsUs))) {
                                 audioFrameQueue.poll()
-                                audioFrameQueue.offer(bytes)
+                                audioFrameQueue.offer(TimedFrame(bytes, ptsUs))
                             }
                         }
                         try { encoder.releaseOutputBuffer(outIdx, false) } catch (_: Exception) {}
@@ -1383,13 +1400,13 @@ class StreamService : LifecycleService() {
                 } catch (_: InterruptedException) { null }
                 if (frame == null) continue
 
-                val pts = System.currentTimeMillis()
+                val pts = frame.ptsUs
                 val header = ByteBuffer.allocate(12)
                 header.putLong(pts)
-                header.putInt(frame.size)
+                header.putInt(frame.data.size)
                 try {
                     out.write(header.array())
-                    out.write(frame)
+                    out.write(frame.data)
                     out.flush()
                 } catch (_: java.io.IOException) {
                     break
