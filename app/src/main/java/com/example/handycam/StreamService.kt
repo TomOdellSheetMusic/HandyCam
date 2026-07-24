@@ -121,7 +121,7 @@ class StreamService : LifecycleService() {
     private var screenCaptureHandler: Handler? = null
 
     // Audio capture + AAC encode fields
-    private val audioFrameQueue = ArrayBlockingQueue<TimedFrame>(8)
+    private val audioFrameQueue = LinkedBlockingQueue<TimedFrame>(8)
     private var audioConfig: ByteArray? = null
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: MediaCodec? = null
@@ -129,10 +129,10 @@ class StreamService : LifecycleService() {
     private var audioEncoderOutputThread: Thread? = null
     @Volatile private var audioRunning = false
 
-    private var streamStartTime = -1L
+    private var streamStartTime: Long = -1
 
     private fun getStreamRelativeTimeUs(): Long {
-        val now = SystemClock.elapsedRealtimeNanos() / 1000L
+        val now = android.os.SystemClock.elapsedRealtimeNanos() / 1000L
         if (streamStartTime == -1L) {
             streamStartTime = now
         }
