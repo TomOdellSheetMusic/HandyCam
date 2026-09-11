@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and attach bundles to (e.g. v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build signed Android bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Stamp release version
+        env:
+          TAG: ${{ env.TAG }}
+        run: |
+          VERSION="${TAG#v}"
+          # Derive a monotonically increasing versionCode from the tag (e.g. v1.2.3 -> 1002003).
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+          VERSION_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
+          echo "ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      - name: Setup Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 secret is not set; the APK will be signed with the debug keystore."
+            exit 0
+          fi
+          base64 -d <<< "$ANDROID_KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build release bundles
+        run: ./gradlew :app:assembleRelease :app:bundleRelease
+
+      - name: Normalize artifact names
+        env:
+          VERSION: ${{ env.TAG }}
+        run: |
+          VERSION="${VERSION#v}"
+          OUT='app/build/outputs'
+          APK=$(find "$OUT/apk/release" -name '*.apk' -type f | head -1)
+          AAB=$(find "$OUT/bundle/release" -name '*.aab' -type f | head -1)
+          [ -n "$APK" ] || { echo 'APK not found' >&2; exit 1; }
+          [ -n "$AAB" ] || { echo 'AAB not found' >&2; exit 1; }
+          mv "$APK" "$OUT/apk/release/HandyCam-${VERSION}-universal.apk"
+          mv "$AAB" "$OUT/bundle/release/HandyCam-${VERSION}-universal.aab"
+
+      - name: Attest Android bundles
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+
+      - name: Attach bundles to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT='app/build/outputs'
+          for f in "$OUT"/apk/release/*.apk "$OUT"/bundle/release/*.aab; do
+            [ -e "$f" ] || continue
+            echo "Uploading $f"
+            gh release upload "$TAG" "$f" --clobber
+          done
