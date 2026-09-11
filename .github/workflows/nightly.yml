@@ -43,9 +43,14 @@ jobs:
           GIT_SHA: ${{ github.sha }}
         run: |
           SHORT_SHA="${GIT_SHA:0:7}"
-          # Nightly versionCode is derived from the date so it always increases.
-          VERSION_CODE=$(date -u +%Y%m%d%H%M)
-          echo "ANDROID_VERSION_NAME=nightly-$SHORT_SHA" >> "$GITHUB_ENV"
+          # Epoch minutes: monotonic, fits comfortably in Android's Int versionCode
+          # (max 2,100,000,000) and always increases across nightly builds. The old
+          # YYYYMMDDHHMM scheme overflowed Int, so versionCode silently fell back to
+          # 1 and Obtainium always reported an update.
+          VERSION_CODE=$(( $(date -u +%s) / 60 ))
+          # Proper semver prerelease so Obtainium can compare versions reliably.
+          VERSION_NAME="0.0.0-nightly.${VERSION_CODE}"
+          echo "ANDROID_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
 
       - name: Setup Android signing
@@ -87,12 +92,12 @@ jobs:
 
       - name: Normalize artifact name
         env:
-          GIT_SHA: ${{ github.sha }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
         run: |
           OUT='app/build/outputs/apk/release'
           APK=$(find "$OUT" -name '*.apk' -type f | head -1)
           [ -n "$APK" ] || { echo 'APK not found' >&2; exit 1; }
-          mv "$APK" "$OUT/HandyCam-nightly-${GIT_SHA:0:7}.apk"
+          mv "$APK" "$OUT/HandyCam-${VERSION_NAME}-universal.apk"
 
       - name: Attest nightly APK
         uses: actions/attest-build-provenance@v2
@@ -110,12 +115,20 @@ jobs:
             gh release upload nightly "$f" --clobber
           done
 
+      - name: Generate and attach Obtainium config
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+        run: |
+          node scripts/obtainium-generate.js "$VERSION_NAME" "nightly" obtainium.json
+          gh release upload nightly obtainium.json --clobber
+
       - name: Remove superseded nightly APKs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view nightly --json assets > nightly-assets.json
-          jq -r '.assets[] | select(.name | test("^HandyCam-nightly-.*\\.apk$")) | .name' \
+          jq -r '.assets[] | select(.name | test("^HandyCam-.*-universal\\.apk$")) | .name' \
             nightly-assets.json \
             | sort \
             | head -n -5 \
