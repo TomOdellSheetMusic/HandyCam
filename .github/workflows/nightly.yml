@@ -1,0 +1,126 @@
+name: Nightly
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build signed nightly APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Stamp nightly version
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${GIT_SHA:0:7}"
+          # Nightly versionCode is derived from the date so it always increases.
+          VERSION_CODE=$(date -u +%Y%m%d%H%M)
+          echo "ANDROID_VERSION_NAME=nightly-$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      - name: Setup Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 secret is not set; the APK will be signed with the debug keystore."
+            exit 0
+          fi
+          base64 -d <<< "$ANDROID_KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Ensure nightly release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          if gh release view nightly >/dev/null 2>&1; then
+            echo "Reusing the existing nightly release."
+          else
+            gh release create nightly \
+              --prerelease \
+              --target "$GIT_SHA" \
+              --title "Nightly (dev)" \
+              --notes "Rolling nightly build from dev — $GIT_SHA"
+          fi
+
+      - name: Normalize artifact name
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          OUT='app/build/outputs/apk/release'
+          APK=$(find "$OUT" -name '*.apk' -type f | head -1)
+          [ -n "$APK" ] || { echo 'APK not found' >&2; exit 1; }
+          mv "$APK" "$OUT/HandyCam-nightly-${GIT_SHA:0:7}.apk"
+
+      - name: Attest nightly APK
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: app/build/outputs/apk/release/*.apk
+
+      - name: Attach APK to nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT='app/build/outputs/apk/release'
+          for f in "$OUT"/*.apk; do
+            [ -e "$f" ] || continue
+            echo "Uploading $f"
+            gh release upload nightly "$f" --clobber
+          done
+
+      - name: Remove superseded nightly APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view nightly --json assets > nightly-assets.json
+          jq -r '.assets[] | select(.name | test("^HandyCam-nightly-.*\\.apk$")) | .name' \
+            nightly-assets.json \
+            | sort \
+            | head -n -5 \
+            | while read -r name; do
+                [ -n "$name" ] || continue
+                echo "Removing superseded nightly asset: $name"
+                gh release delete-asset nightly "$name" --yes
+              done

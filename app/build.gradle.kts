@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +8,21 @@ plugins {
     id("kotlin-kapt")
     id("com.google.dagger.hilt.android")
     kotlin("plugin.serialization") version "2.0.21"
+}
+
+// Load release signing configuration from keystore.properties (created by CI from
+// GitHub secrets) or from environment variables. When absent, release builds fall
+// back to the debug keystore so local builds keep working out of the box.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
+fun signingStoreFile(): File? {
+    keystoreProperties["storeFile"]?.let { return file(it as String) }
+    System.getenv("ANDROID_KEYSTORE_PATH")?.let { return file(it) }
+    return null
 }
 
 android {
@@ -17,10 +35,24 @@ android {
         applicationId = "com.example.handycam"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Version is stamped by CI from the release tag / nightly build. Falls back
+        // to sensible defaults for local builds.
+        versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("ANDROID_VERSION_NAME") ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = signingStoreFile()
+            storePassword = keystoreProperties["storePassword"] as String?
+                ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = keystoreProperties["keyAlias"] as String?
+                ?: System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = keystoreProperties["keyPassword"] as String?
+                ?: System.getenv("ANDROID_KEY_PASSWORD")
+        }
     }
 
     buildTypes {
@@ -34,7 +66,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            // Only sign with the release keystore when one is configured; otherwise
+            // fall back to the debug keystore so local builds still succeed.
+            signingConfig = if (signingStoreFile() != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
