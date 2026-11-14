@@ -18,7 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: chmod +x gradlew
       - run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 
@@ -40,4 +40,4 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/dependency-submission@v4
+      - uses: gradle/actions/dependency-submission@v6
