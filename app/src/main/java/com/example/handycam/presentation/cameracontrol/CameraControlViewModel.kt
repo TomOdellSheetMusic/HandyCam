@@ -45,6 +45,8 @@ class CameraControlViewModel @Inject constructor(
     val useAvc: StateFlow<Boolean> = streamStateHolder.useAvc
     val encoderWidth: StateFlow<Int> = cameraStateHolder.encoderWidth
     val encoderHeight: StateFlow<Int> = cameraStateHolder.encoderHeight
+    val sensorOrientation: StateFlow<Int> = cameraStateHolder.sensorOrientation
+    val frontFacing: StateFlow<Boolean> = cameraStateHolder.frontFacing
     val exposureMin: StateFlow<Int> = cameraStateHolder.exposureMin
     val exposureMax: StateFlow<Int> = cameraStateHolder.exposureMax
     val exposureStep: StateFlow<Float> = cameraStateHolder.exposureStep
