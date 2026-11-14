@@ -204,6 +204,11 @@ class StreamService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             StreamActions.START -> {
+                // Reconfigure in one service command so stopSelf cannot race a new start.
+                if (running) {
+                    unregisterMdns()
+                    stopStreaming()
+                }
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val streamingPort = intent.getIntExtra("streamingPort", 4747)
                 val width = intent.getIntExtra("width", 1080)
@@ -718,6 +723,7 @@ class StreamService : LifecycleService() {
                 // Store camera control for preview activity
                 cameraStateHolder.cameraControl = camera.cameraControl
                 cameraStateHolder.cameraInfo = camera.cameraInfo
+                camera.cameraControl.enableTorch(streamStateHolder.torchEnabled.value)
 
                 Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
 
@@ -813,6 +819,7 @@ class StreamService : LifecycleService() {
             Log.w(TAG, "Error closing server socket", e)
         }
         serverThread?.interrupt()
+        try { serverThread?.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
         serverThread = null
         frameQueue.clear()
         try {
@@ -1141,7 +1148,7 @@ class StreamService : LifecycleService() {
                         // Only throttle for MJPEG where each frame is fully independent.
                         if (!isAvcClient) {
                             val now = getStreamRelativeTimeUs()
-                            if (now - lastSent < intervalMs) {
+                            if (now - lastSent < intervalMs * 1000L) {
                                 continue
                             }
                         }

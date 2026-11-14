@@ -304,7 +304,11 @@ class KtorHttpServerService : LifecycleService() {
             post("/api/camera/start") {
 
                 try {
-                    if (!isAppInForeground()) {
+                    if (streamStateHolder.isStreaming.value && streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture and start it again from the app"))
+                        return@post
+                    }
+                    if (!streamStateHolder.isStreaming.value && !isAppInForeground()) {
                         getSharedPreferences(RemoteStartKeys.PREFS, Context.MODE_PRIVATE)
                             .edit()
                             .putBoolean(RemoteStartKeys.KEY_PENDING_REMOTE_START, true)
@@ -431,6 +435,7 @@ class KtorHttpServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val fps = params["fps"] ?: 30
+                    require(fps in 1..60) { "FPS must be between 1 and 60" }
                     streamStateHolder.setFps(fps)
                     call.respond(ApiResponse(true, "FPS updated to $fps"))
                 } catch (e: Exception) {
@@ -466,6 +471,10 @@ class KtorHttpServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Boolean>>()
                     val enabled = params["enabled"] ?: false
+                    if (streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop the stream before changing codec"))
+                        return@post
+                    }
                     streamStateHolder.setUseAvc(enabled)
                     call.respond(ApiResponse(true, "useAvc set to $enabled"))
                 } catch (e: Exception) {
@@ -560,6 +569,7 @@ class KtorHttpServerService : LifecycleService() {
                 // Serve HTML from assets for easier editing and caching
                 try {
                     val html = this@KtorHttpServerService.assets.open("camera_control.html").bufferedReader().use { it.readText() }
+                    call.response.headers.append("Cache-Control", "no-store")
                     call.respondText(html, ContentType.Text.Html)
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, "Failed to load camera UI: ${e.message}")
