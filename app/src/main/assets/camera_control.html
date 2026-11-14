@@ -136,6 +136,9 @@
             accent-color: #1a73e8;
         }
 
+        .fps-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+        .fps-presets button { flex: 1 1 65px; width: auto; margin: 0; }
+
         .control-row .val-label {
             min-width: 36px;
             text-align: right;
@@ -217,11 +220,13 @@
 
         <div class="card">
             <div class="card-title">FPS</div>
+            <div class="fps-presets" id="fpsPresets" aria-label="Frame rate presets"></div>
             <div class="control-row">
-                <label>Frame rate</label>
-                <input type="range" id="fpsSlider" min="1" max="60" value="30" oninput="setFps(this.value)">
-                <span class="val-label"><span id="fpsValue">30</span></span>
+                <label for="fpsSlider">Frame rate</label>
+                <input type="range" id="fpsSlider" min="1" max="60" step="1" value="30" oninput="setFps(this.value)">
+                <span class="val-label"><span id="fpsValue">30</span> fps</span>
             </div>
+            <div id="fpsHint">Available: 1–60 fps. Actual frame rate may vary.</div>
             <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
         </div>
 
@@ -356,10 +361,11 @@
                     `${data.jpegQuality}%`;
 
                 // Sliders
-                if (!editingSettings.has('fps')) {
-                    document.getElementById('fpsSlider').value = data.fps;
-                    document.getElementById('fpsValue').textContent = data.fps;
-                }
+                const fpsSlider = document.getElementById('fpsSlider');
+                fpsSlider.max = data.maxFps || 60;
+                renderFpsPresets(Number(fpsSlider.max));
+                if (!editingSettings.has('fps')) fpsSlider.value = data.fps;
+                updateFpsValidation();
 
                 if (!editingSettings.has('jpeg')) {
                     document.getElementById('jpegSlider').value = data.jpegQuality;
@@ -503,9 +509,45 @@
             }
         }
 
+        function updateFpsValidation() {
+            const input = document.getElementById('fpsSlider');
+            const value = Number(input.value);
+            const max = Number(input.max);
+            const valid = input.value !== '' && Number.isInteger(value) && value >= 1 && value <= max;
+            document.getElementById('fpsValue').textContent = input.value;
+            document.querySelectorAll('#fpsPresets button').forEach(button => {
+                const selected = Number(button.dataset.fps) === value;
+                button.classList.toggle('active', selected);
+                button.setAttribute('aria-pressed', String(selected));
+            });
+            document.getElementById('fpsHint').textContent = valid ?
+                `Available: 1–${max} fps. Actual frame rate may vary.` :
+                `Choose a frame rate from 1 to ${max}.`;
+            document.getElementById('applyFpsBtn').disabled = !valid;
+            return valid;
+        }
+
+        function renderFpsPresets(max) {
+            const container = document.getElementById('fpsPresets');
+            if (container.dataset.maximum === String(max)) return;
+            container.dataset.maximum = String(max);
+            container.replaceChildren();
+            [...new Set([15, 30, 60, 120, 240].filter(fps => fps <= max).concat(max))]
+                .sort((a, b) => a - b).forEach(fps => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'toggle-btn';
+                    button.dataset.fps = String(fps);
+                    button.textContent = `${fps} fps`;
+                    button.onclick = () => setFps(fps);
+                    container.appendChild(button);
+                });
+        }
+
         function setFps(fps) {
             editingSettings.add('fps');
-            document.getElementById('fpsValue').textContent = fps;
+            document.getElementById('fpsSlider').value = fps;
+            updateFpsValidation();
         }
 
         function setJpegQuality(quality) {
@@ -534,10 +576,14 @@
                 await checkCameraSettings();
             } catch (e) {
                 showMessage('Failed to apply setting: ' + e.message, false);
-            } finally { button.disabled = false; }
+            } finally {
+                button.disabled = false;
+                if (key === 'fps') updateFpsValidation();
+            }
         }
 
         function applyFps() {
+            if (!updateFpsValidation()) return;
             return applySetting('/api/settings/fps', { fps: Number(document.getElementById('fpsSlider').value) }, 'fps', document.getElementById('applyFpsBtn'));
         }
 
@@ -727,6 +773,8 @@
         }
 
         // Check status and camera settings on load
+        renderFpsPresets(60);
+        updateFpsValidation();
         checkStatus();
         checkCameraSettings();
         // Load camera list on load

@@ -78,6 +78,7 @@ class StreamService : LifecycleService() {
     private var cameraBeforeSwitch: String? = null
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
+    private var highSpeedCameraSession = false
     private var useAvc: Boolean = false
     private var requestedWidth: Int = 1280
     private var requestedHeight: Int = 720
@@ -401,6 +402,7 @@ class StreamService : LifecycleService() {
             val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             sessionSurfaces.forEach { b.addTarget(it) }
             b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            highFrameRateRange(cam.id)?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             // Flash / torch
             val flashMode = if (streamStateHolder.torchEnabled.value)
@@ -468,7 +470,7 @@ class StreamService : LifecycleService() {
             val session = captureSession ?: return@post
             val req = buildCamera2Request(cam) ?: return@post
             try {
-                session.setRepeatingRequest(req, null, cameraHandler)
+                submitRepeating(session, req)
             } catch (e: Exception) {
                 Log.e(TAG, "setRepeatingRequest failed", e)
             }
@@ -530,7 +532,8 @@ class StreamService : LifecycleService() {
                         val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
                         b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                         b.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd)
-                        session.setRepeatingRequest(b.build(), null, cameraHandler)
+                        highFrameRateRange(cam.id)?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                        submitRepeating(session, b.build())
                         Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to apply focus on Camera2", e)
@@ -630,6 +633,7 @@ class StreamService : LifecycleService() {
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
+        highSpeedCameraSession = false
         useScreenCapture = screenCapture
 
         if (useScreenCapture) {
@@ -660,6 +664,7 @@ class StreamService : LifecycleService() {
     }
 
 
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
     private fun startCameraX(width: Int, height: Int) {
         // Start CameraX analysis to capture frames (MJPEG path)
         // Initialize camera manager early so findCameraId and buildCameraSelectorForId can work
@@ -679,7 +684,7 @@ class StreamService : LifecycleService() {
             // keep reference so we can rebind while streaming
             this@StreamService.cameraProvider = cameraProvider
 
-            val analysisUseCase = ImageAnalysis.Builder()
+            val analysisBuilder = ImageAnalysis.Builder()
                 // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
                 // space regardless of phone orientation — ensures consistent landscape output
                 .setTargetRotation(android.view.Surface.ROTATION_90)
@@ -689,7 +694,13 @@ class StreamService : LifecycleService() {
                 // aspect ratio and avoids selecting strange square fallbacks.
                 .setTargetResolution(android.util.Size(width, height))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
+            val cameraId = findCameraId(selectedCamera)
+            val highRange = cameraId?.let { highFrameRateRange(it) }
+            if (highRange != null) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(analysisBuilder)
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, highRange)
+            }
+            val analysisUseCase = analysisBuilder.build()
 
             cameraExecutor = Executors.newSingleThreadExecutor()
             analysisUseCase.setAnalyzer(cameraExecutor!!) { image ->
@@ -974,7 +985,10 @@ class StreamService : LifecycleService() {
             } catch (_: Exception) {}
         }
 
-        encoder = MediaCodec.createEncoderByType(mime)
+        val encoderName = if (fps > 60) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            .findEncoderForFormat(format) else null
+        encoder = if (encoderName != null) MediaCodec.createByCodecName(encoderName)
+            else MediaCodec.createEncoderByType(mime)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         // create an input surface for Camera2 to write into
         encoderInputSurface = encoder?.createInputSurface()
@@ -1373,6 +1387,8 @@ class StreamService : LifecycleService() {
 
         // pick camera id
         val camId = checkNotNull(findCameraId(selectedCamera)) { "No camera found for $selectedCamera" }
+        val fpsLimits = FrameRateCapabilities.limits(checkNotNull(cameraManager), selectedCamera, reqWidth, reqHeight, true)
+        highSpeedCameraSession = fpsLimits.needsHighSpeed(targetFps)
 
         // determine a supported output size for the camera for encoder surface
         var chosenWidth = reqWidth
@@ -1474,6 +1490,10 @@ class StreamService : LifecycleService() {
             setupEncoder(reqWidth, reqHeight, fps)
         }
 
+        if (highSpeedCameraSession && (chosenWidth != maxOf(reqWidth, reqHeight) || chosenHeight != minOf(reqWidth, reqHeight))) {
+            throw IllegalStateException("Requested high-speed resolution is unavailable")
+        }
+
         try {
             cameraManager?.openCamera(camId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -1487,6 +1507,8 @@ class StreamService : LifecycleService() {
                         }
                         // create an ImageReader as an additional consumer so some devices
                         // will happily start streaming into the encoder surface
+                        val targets = mutableListOf(surface)
+                        if (!highSpeedCameraSession) {
                         val ir = imageReader ?: android.media.ImageReader.newInstance(
                             chosenWidth.takeIf { it>0 } ?: 1280,
                             chosenHeight.takeIf { it>0 } ?: 720,
@@ -1499,8 +1521,8 @@ class StreamService : LifecycleService() {
                             val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
                             try { img?.close() } catch (_: Exception) {}
                         }, cameraHandler)
-
-                        val targets = mutableListOf(surface, ir.surface)
+                        targets.add(ir.surface)
+                        }
                         cameraStateHolder.previewSurface?.let { targets.add(it) }
 
                         val sessionCb = object : CameraCaptureSession.StateCallback() {
@@ -1516,7 +1538,7 @@ class StreamService : LifecycleService() {
                                         reqBuilder.build()
                                     }
 
-                                    session.setRepeatingRequest(request, null, cameraHandler)
+                                    submitRepeating(session, request)
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
                                     if (cameraBeforeSwitch != null) {
                                         streamStateHolder.setCamera(selectedCamera)
@@ -1538,11 +1560,17 @@ class StreamService : LifecycleService() {
                             }
                         }
                         val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
-                            android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                            if (highSpeedCameraSession) android.hardware.camera2.params.SessionConfiguration.SESSION_HIGH_SPEED
+                            else android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
                             targets.map { physicalOutput(it) },
                             java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                             sessionCb
                         )
+                        highFrameRateRange(camera.id)?.let { range ->
+                            val parameters = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                            parameters.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                            sessionConfig.setSessionParameters(parameters.build())
+                        }
                         camera.createCaptureSession(sessionConfig)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to create capture request/session", e)
@@ -1610,6 +1638,24 @@ class StreamService : LifecycleService() {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    private fun highFrameRateRange(cameraId: String): android.util.Range<Int>? {
+        if (targetFps <= 60) return null
+        if (highSpeedCameraSession) {
+            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, requestedWidth, requestedHeight, targetFps)
+        }
+        val ranges = cameraManager?.getCameraCharacteristics(cameraId)
+            ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList() ?: return null
+        return FrameRateCapabilities.selectRange(ranges, targetFps)
+    }
+
+    private fun submitRepeating(session: CameraCaptureSession, request: CaptureRequest) {
+        if (session is android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession) {
+            session.setRepeatingBurst(session.createHighSpeedRequestList(request), null, cameraHandler)
+        } else {
+            session.setRepeatingRequest(request, null, cameraHandler)
+        }
     }
 
     private fun setInitialLensZoom(selection: String, avc: Boolean) {
@@ -1686,6 +1732,14 @@ class StreamService : LifecycleService() {
         if (newCam == selectedCamera) {
             Log.i(TAG, "Camera already set to $newCam")
             streamStateHolder.setCameraSwitchStatus("")
+            return
+        }
+        if (targetFps > 60 && (!useAvc || targetFps > FrameRateCapabilities.maxStreamingFps(
+                getSystemService(Context.CAMERA_SERVICE) as CameraManager,
+                newCam, requestedWidth, requestedHeight, useAvc
+            ))) {
+            streamStateHolder.setCamera(selectedCamera)
+            streamStateHolder.setCameraSwitchStatus("Stop streaming and lower the frame rate before switching cameras")
             return
         }
         cameraBeforeSwitch = selectedCamera
@@ -1889,8 +1943,9 @@ class StreamService : LifecycleService() {
                         surfaces.forEach { builder.addTarget(it) }
                         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        highFrameRateRange(camera.id)?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                         
-                        newSession.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        submitRepeating(newSession, builder.build())
                         Log.i(TAG, "Camera2 session reconfigured with ${surfaces.size} surfaces")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start repeating request after reconfigure", e)
@@ -1902,11 +1957,17 @@ class StreamService : LifecycleService() {
                 }
             }
             val reconfigSessionConfig = android.hardware.camera2.params.SessionConfiguration(
-                android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                if (highSpeedCameraSession) android.hardware.camera2.params.SessionConfiguration.SESSION_HIGH_SPEED
+                else android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
                 surfaces.map { physicalOutput(it) },
                 java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                 sessionCb2
             )
+            highFrameRateRange(camera.id)?.let { range ->
+                val parameters = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                parameters.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                reconfigSessionConfig.setSessionParameters(parameters.build())
+            }
             camera.createCaptureSession(reconfigSessionConfig)
         } catch (e: Exception) {
             Log.e(TAG, "Error reconfiguring Camera2 session", e)

@@ -37,6 +37,9 @@ class MainViewModel @Inject constructor(
 
     val localIp: String get() = getLocalIpAddress() ?: "0.0.0.0"
 
+    fun maxStreamingFps(camera: String, width: Int, height: Int, avc: Boolean): Int =
+        cameraRepository.maxStreamingFps(camera, width, height, avc)
+
     init {
         viewModelScope.launch { _availableCameras.value = cameraRepository.getAvailableCameras() }
         viewModelScope.launch {

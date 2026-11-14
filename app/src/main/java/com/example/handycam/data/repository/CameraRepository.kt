@@ -3,6 +3,7 @@ package com.example.handycam.data.repository
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import com.example.handycam.FrameRateCapabilities
 import com.example.handycam.data.model.CameraInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -19,6 +20,9 @@ class CameraRepository @Inject constructor(
     private val cameraManager: CameraManager by lazy {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
+
+    fun maxStreamingFps(camera: String, width: Int, height: Int, avc: Boolean): Int =
+        FrameRateCapabilities.maxStreamingFps(cameraManager, camera, width, height, avc)
 
     /**
      * Get list of all available cameras with their metadata.
