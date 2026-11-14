@@ -39,6 +39,16 @@ class CameraStateHolder @Inject constructor() {
     private val _encoderHeight = MutableStateFlow(0)
     val encoderHeight: StateFlow<Int> = _encoderHeight
 
+    private val _sensorOrientation = MutableStateFlow(0)
+    val sensorOrientation: StateFlow<Int> = _sensorOrientation
+    private val _frontFacing = MutableStateFlow(false)
+    val frontFacing: StateFlow<Boolean> = _frontFacing
+
+    fun setCameraOrientation(sensorOrientation: Int, frontFacing: Boolean) {
+        _sensorOrientation.value = sensorOrientation
+        _frontFacing.value = frontFacing
+    }
+
     private val _exposureMin = MutableStateFlow(0)
     val exposureMin: StateFlow<Int> = _exposureMin
 
@@ -66,6 +76,8 @@ class CameraStateHolder @Inject constructor() {
         cameraInfo = null
         _encoderWidth.value = 0
         _encoderHeight.value = 0
+        _sensorOrientation.value = 0
+        _frontFacing.value = false
         _exposureMin.value = 0
         _exposureMax.value = 0
         _exposureStep.value = 0f

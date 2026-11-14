@@ -1379,6 +1379,10 @@ class StreamService : LifecycleService() {
         var chosenHeight = reqHeight
         try {
             val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
+            cameraStateHolder.setCameraOrientation(
+                chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                chars?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            )
             val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
                 val exposureStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
