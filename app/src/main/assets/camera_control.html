@@ -219,7 +219,7 @@
             <div class="card-title">FPS</div>
             <div class="control-row">
                 <label>Frame rate</label>
-                <input type="range" id="fpsSlider" min="15" max="60" value="30" oninput="setFps(this.value)">
+                <input type="range" id="fpsSlider" min="1" max="60" value="30" oninput="setFps(this.value)">
                 <span class="val-label"><span id="fpsValue">30</span></span>
             </div>
             <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
@@ -268,6 +268,7 @@
             <div class="card-title">Controls</div>
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
             <div id="torchNote">Torch only works while stream is active</div>
+            <div>Stop the stream to change codec.</div>
             <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">Codec: MJPEG</button>
             <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">Auto Exposure: ON</button>
         </div>
@@ -278,6 +279,8 @@
     </div>
 
     <script>
+        let streaming = false;
+        let editingSettings = new Set();
         let torchEnabled = false;
         let avcEnabled = false;
         let avcBitrate = 2000;
@@ -306,7 +309,9 @@
 
                 const badge = document.getElementById('status');
                 const text = document.getElementById('statusText');
-                if (data.streaming === true) {
+                streaming = data.streaming === true;
+                document.getElementById('useAvcBtn').disabled = streaming;
+                if (streaming) {
                     text.textContent = 'Streaming on port ' + data.port;
                     badge.className = 'status-badge active';
                     try { document.getElementById('torchBtn').disabled = false; } catch (_) {}
@@ -318,7 +323,8 @@
                     try { document.getElementById('torchNote').style.display = 'block'; } catch (_) {}
                 }
             } catch (e) {
-                showMessage('Failed to check status: ' + e.message, false);
+                document.getElementById('statusText').textContent = 'Server disconnected ? reconnecting';
+                document.getElementById('status').className = 'status-badge inactive';
             }
         }
         async function checkCameraSettings() {
@@ -347,11 +353,15 @@
                     `${data.jpegQuality}%`;
 
                 // Sliders
-                document.getElementById('fpsSlider').value = data.fps;
-                document.getElementById('fpsValue').textContent = data.fps;
+                if (!editingSettings.has('fps')) {
+                    document.getElementById('fpsSlider').value = data.fps;
+                    document.getElementById('fpsValue').textContent = data.fps;
+                }
 
-                document.getElementById('jpegSlider').value = data.jpegQuality;
-                document.getElementById('jpegValue').textContent = data.jpegQuality;
+                if (!editingSettings.has('jpeg')) {
+                    document.getElementById('jpegSlider').value = data.jpegQuality;
+                    document.getElementById('jpegValue').textContent = data.jpegQuality;
+                }
 
                 const zoomPercent = Math.round((data.zoom || 0) * 100);
                 document.getElementById('zoomSlider').value = zoomPercent;
@@ -369,9 +379,15 @@
 
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
-                avcBitrate = data.avcBitrate || 2000;
+                if (!editingSettings.has('avc')) {
+                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : 2000;
+                    document.getElementById('avcSlider').value = avcBitrate;
+                    document.getElementById('avcValue').textContent = avcBitrate;
+                }
+                avcGroupPlaceholder = null;
                 const jpegCard = document.getElementById('jpegCard');
                 const avcGroup = document.getElementById('avcGroup');
+                avcGroup.style.display = avcEnabled ? '' : 'none';
                 if (avcEnabled) {
                     jpegCard.style.display = 'none';
                 } else {
@@ -404,7 +420,7 @@
 
             } catch (e) {
                 console.error('Failed to check camera settings:', e);
-                showMessage('Failed to load camera settings', false);
+                // The status badge reports disconnection; keep the last settings visible.
             }
         }
 
@@ -480,103 +496,46 @@
             }
         }
 
-        async function setFps(fps) {
+        function setFps(fps) {
+            editingSettings.add('fps');
             document.getElementById('fpsValue').textContent = fps;
-            try {
-                const response = await fetch('/api/settings/fps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fps: parseInt(fps) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set FPS: ' + e.message, false);
-            }
         }
 
-        async function setJpegQuality(quality) {
+        function setJpegQuality(quality) {
+            editingSettings.add('jpeg');
             document.getElementById('jpegValue').textContent = quality;
+        }
+
+        async function applySetting(endpoint, body, key, button) {
+            button.disabled = true;
             try {
-                const response = await fetch('/api/settings/jpeg-quality', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ quality: parseInt(quality) })
+                const response = await fetch(endpoint, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
                 });
                 const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
+                if (!response.ok || !data.success) throw new Error(data.message);
+                editingSettings.delete(key);
+                if (streaming) {
+                    const restart = await fetch('/api/camera/start', { method: 'POST' });
+                    const result = await restart.json();
+                    if (!restart.ok || !result.success) throw new Error(result.message);
+                    showMessage('Stream restart requested', true);
+                } else {
+                    showMessage(data.message, true);
+                }
+                await checkCameraSettings();
             } catch (e) {
-                showMessage('Failed to set JPEG quality: ' + e.message, false);
-            }
+                showMessage('Failed to apply setting: ' + e.message, false);
+            } finally { button.disabled = false; }
         }
 
-        async function applyFps() {
-            const btn = document.getElementById('applyFpsBtn');
-            btn.disabled = true;
-            const fps = parseInt(document.getElementById('fpsSlider').value);
-            try {
-                // ensure setting saved
-                await fetch('/api/settings/fps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fps })
-                });
-            } catch (e) {
-                showMessage('Failed to save FPS: ' + e.message, false);
-                btn.disabled = false; return;
-            }
-
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) {
-                    showMessage('Failed to stop stream: ' + data.message, false);
-                    btn.disabled = false; return;
-                }
-
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
-            } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
-            } finally {
-                btn.disabled = false;
-            }
+        function applyFps() {
+            return applySetting('/api/settings/fps', { fps: Number(document.getElementById('fpsSlider').value) }, 'fps', document.getElementById('applyFpsBtn'));
         }
 
-        async function applyJpeg() {
-            const btn = document.getElementById('applyJpegBtn');
-            btn.disabled = true;
-            const quality = parseInt(document.getElementById('jpegSlider').value);
-            try {
-                await fetch('/api/settings/jpeg-quality', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ quality })
-                });
-            } catch (e) {
-                showMessage('Failed to save JPEG quality: ' + e.message, false);
-                btn.disabled = false; return;
-            }
-
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) {
-                    showMessage('Failed to stop stream: ' + data.message, false);
-                    btn.disabled = false; return;
-                }
-
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
-            } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
-            } finally {
-                btn.disabled = false;
-            }
+        function applyJpeg() {
+            return applySetting('/api/settings/jpeg-quality', { quality: Number(document.getElementById('jpegSlider').value) }, 'jpeg', document.getElementById('applyJpegBtn'));
         }
 
         async function setExposure(exposure) {
@@ -653,38 +612,14 @@
         }
 
         function setAvcBitrate(b) {
+            editingSettings.add('avc');
             avcBitrate = parseInt(b);
             document.getElementById('avcValue').textContent = avcBitrate;
         }
 
-        async function applyAvc() {
-            const btn = document.getElementById('applyAvcBtn');
-            btn.disabled = true;
-            try {
-                await fetch('/api/settings/avc-bitrate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bitrate: avcBitrate })
-                });
-            } catch (e) {
-                showMessage('Failed to save AVC bitrate: ' + e.message, false);
-                btn.disabled = false; return;
-            }
-
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) { showMessage('Failed to stop stream: ' + data.message, false); btn.disabled = false; return; }
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
-            } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
-            } finally { btn.disabled = false; }
+        function applyAvc() {
+            return applySetting('/api/settings/avc-bitrate', { bitrate: avcBitrate }, 'avc', document.getElementById('applyAvcBtn'));
         }
-
-    
 
         async function loadCameraList() {
             try {
@@ -715,7 +650,7 @@
             } catch (e) {
                 console.error('Failed to load camera list', e);
                 const container = document.getElementById('cameraButtons');
-                container.textContent = 'Failed to load cameras';
+                if (!container.children.length) container.textContent = 'Waiting for server';
             }
         }
 
