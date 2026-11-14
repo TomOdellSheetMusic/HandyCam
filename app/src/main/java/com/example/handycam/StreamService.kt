@@ -79,6 +79,7 @@ class StreamService : LifecycleService() {
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
     private var useAvc: Boolean = false
+    private var useHevc: Boolean = false
     private var requestedWidth: Int = 1280
     private var requestedHeight: Int = 720
 
@@ -212,6 +213,7 @@ class StreamService : LifecycleService() {
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
                 useAvc = intent.getBooleanExtra("useAvc", false)
+                useHevc = useAvc && intent.getBooleanExtra("useHevc", false)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
                 useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
@@ -938,7 +940,7 @@ class StreamService : LifecycleService() {
     }
 
       private fun setupEncoder(width: Int, height: Int, fps: Int) {
-        val mime = "video/avc"
+        val mime = if (useHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
         // choose a higher-quality bitrate: allow a user-specified bitrate override,
         // otherwise derive a reasonable default (pixels * fps / 10)
         // use a more generous default bitrate (pixels * fps / 6) to reduce blocking artifacts
@@ -986,7 +988,7 @@ class StreamService : LifecycleService() {
                         if (outIndex >= 0) {
                             val outBuf = codec.getOutputBuffer(outIndex)
                             val outBytes = ByteArray(info.size)
-                            outBuf?.get(outBytes)
+                            outBuf?.apply { position(info.offset); limit(info.offset + info.size); get(outBytes) }
                             if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                                 avcConfig = outBytes
                                 Log.i(TAG, "Saved AVC config size=${outBytes.size}")
@@ -1012,6 +1014,14 @@ class StreamService : LifecycleService() {
                             try {
                                 val outFmt = codec.outputFormat
                                 Log.i(TAG, "Encoder output format changed: $outFmt")
+                                val configParts = (0..2).mapNotNull { index ->
+                                    outFmt.getByteBuffer("csd-$index")?.duplicate()?.let { buffer ->
+                                        ByteArray(buffer.remaining()).also { buffer.get(it) }
+                                    }
+                                }
+                                if (configParts.isNotEmpty()) {
+                                    avcConfig = configParts.fold(ByteArray(0)) { acc, part -> acc + part }
+                                }
                             } catch (e: Exception) {
                                 Log.i(TAG, "Encoder output format changed")
                             }
@@ -1110,7 +1120,17 @@ class StreamService : LifecycleService() {
                 val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
                 val pollTimeoutMs = intervalMs
                 try {
-                    val isAvcClient = requestedFormat.startsWith("avc")
+                    val isAvcClient = requestedFormat.startsWith("avc") || requestedFormat.startsWith("hevc")
+                    val matches = when {
+                        requestedFormat.startsWith("hevc") -> useAvc && useHevc
+                        requestedFormat.startsWith("avc") -> useAvc && !useHevc
+                        requestedFormat.startsWith("jpg") || requestedFormat.startsWith("mjpg") -> !useAvc
+                        else -> false
+                    }
+                    if (!matches) {
+                        Log.w(TAG, "Client requested $requestedFormat but stream uses ${if (useHevc) "HEVC" else if (useAvc) "AVC" else "MJPEG"}")
+                        return
+                    }
                     // if client requested AVC and we have codec config, send config packet first
                     val config = avcConfig
                     if (isAvcClient && config != null) {

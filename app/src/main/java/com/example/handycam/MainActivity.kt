@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
             putExtra("jpegQuality", mainViewModel.streamStateHolder.jpegQuality.value)
             putExtra("targetFps", mainViewModel.streamStateHolder.fps.value)
             putExtra("useAvc", mainViewModel.streamStateHolder.useAvc.value)
+            putExtra("useHevc", mainViewModel.streamStateHolder.useHevc.value)
             putExtra("avcBitrate", mainViewModel.streamStateHolder.avcBitrate.value)
         }
         try {

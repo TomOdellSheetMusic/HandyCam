@@ -369,6 +369,7 @@ class KtorHttpServerService : LifecycleService() {
                         putExtra("targetFps", streamStateHolder.fps.value)
                         putExtra("avcBitrate", streamStateHolder.avcBitrate.value)
                         putExtra("useAvc", streamStateHolder.useAvc.value)
+            putExtra("useHevc", streamStateHolder.useHevc.value)
                     }
                     startService(intent)
                     streamStateHolder.setStreaming(true)
