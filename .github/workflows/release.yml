@@ -18,7 +18,7 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: android-publish
   cancel-in-progress: false
 
 jobs:
@@ -50,14 +50,8 @@ jobs:
       - name: Stamp release version
         env:
           TAG: ${{ env.TAG }}
-        run: |
-          VERSION="${TAG#v}"
-          # Derive a monotonically increasing versionCode from the tag (e.g. v1.2.3 -> 1002003).
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
-          VERSION_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
-          echo "ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
-          echo "ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+        shell: pwsh
+        run: ./scripts/stamp-android-version.ps1 $env:TAG
 
       - name: Setup Android signing
         env:
@@ -66,9 +60,9 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::warning::ANDROID_KEYSTORE_BASE64 secret is not set; the APK will be signed with the debug keystore."
-            exit 0
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::All Android signing secrets must be configured before publishing a release."
+            exit 1
           fi
           base64 -d <<< "$ANDROID_KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
           cat > keystore.properties <<EOF

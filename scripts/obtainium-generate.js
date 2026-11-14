@@ -24,12 +24,13 @@ const appId = 'com.example.handycam';
 // Obtainium fills in every other setting from its own defaults on import.
 const additionalSettings = {
   about: 'A smartphone webcam client for OBS',
-  // The nightly tag name never changes, so the version has to come from the date instead.
+  // The rolling release title carries the version and commit hash.
   ...(isNightly && {
     includePrereleases: true,
-    useLatestAssetDateAsReleaseDate: true,
-    releaseDateAsVersion: true,
-    versionDetection: false,
+    fallbackToOlderReleases: true,
+    filterReleaseTitlesByRegEx: '^\\d+\\.\\d+\\.\\d+.*\\+[0-9a-f]{7}$',
+    releaseTitleAsVersion: true,
+    versionDetection: true,
   }),
 };
 

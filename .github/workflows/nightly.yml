@@ -12,8 +12,8 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: nightly
-  cancel-in-progress: true
+  group: android-publish
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -39,19 +40,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Stamp nightly version
+        shell: pwsh
         env:
-          GIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          SHORT_SHA="${GIT_SHA:0:7}"
-          # Epoch minutes: monotonic, fits comfortably in Android's Int versionCode
-          # (max 2,100,000,000) and always increases across nightly builds. The old
-          # YYYYMMDDHHMM scheme overflowed Int, so versionCode silently fell back to
-          # 1 and Obtainium always reported an update.
-          VERSION_CODE=$(( $(date -u +%s) / 60 ))
-          # Proper semver prerelease so Obtainium can compare versions reliably.
-          VERSION_NAME="0.0.0-nightly.${VERSION_CODE}"
-          echo "ANDROID_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
-          echo "ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          $tag = git tag --list 'v[0-9]*' --sort=-version:refname | Select-Object -First 1
+          if (-not $tag) { throw 'No version tag found for the nightly build' }
+          ./scripts/stamp-android-version.ps1 nightly -BaseVersion $tag -CommitSha $env:COMMIT_SHA
 
       - name: Setup Android signing
         env:
@@ -60,9 +55,9 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::warning::ANDROID_KEYSTORE_BASE64 secret is not set; the APK will be signed with the debug keystore."
-            exit 0
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::All Android signing secrets must be configured before publishing a nightly."
+            exit 1
           fi
           base64 -d <<< "$ANDROID_KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
           cat > keystore.properties <<EOF
@@ -126,14 +121,21 @@ jobs:
       - name: Remove superseded nightly APKs
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
         run: |
+          set -euo pipefail
+          current="HandyCam-${VERSION_NAME}-universal.apk"
           gh release view nightly --json assets > nightly-assets.json
-          jq -r '.assets[] | select(.name | test("^HandyCam-.*-universal\\.apk$")) | .name' \
-            nightly-assets.json \
-            | sort \
-            | head -n -5 \
-            | while read -r name; do
-                [ -n "$name" ] || continue
-                echo "Removing superseded nightly asset: $name"
-                gh release delete-asset nightly "$name" --yes
-              done
+          jq -e --arg current "$current" 'any(.assets[]; .name == $current)' nightly-assets.json > /dev/null
+          jq -r --arg current "$current" '.assets[] | select((.name | test("^HandyCam.*\\.apk$")) and .name != $current) | .name' nightly-assets.json > old-apks.txt
+          while IFS= read -r name; do
+            echo "Removing superseded nightly asset: $name"
+            gh release delete-asset nightly "$name" --yes
+          done < old-apks.txt
+
+      - name: Update nightly release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+          GIT_SHA: ${{ github.sha }}
+        run: gh release edit nightly --title "$VERSION_NAME" --notes "Rolling nightly build from dev — $GIT_SHA"
