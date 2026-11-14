@@ -95,6 +95,7 @@ class MainViewModel @Inject constructor(
                 putExtra("targetFps", fps)
                 putExtra("useAvc", useAvc)
                 putExtra("useHevc", streamStateHolder.useHevc.value)
+                putExtra("useHdr", streamStateHolder.useHdr.value)
                 avcBitrate?.let { putExtra("avcBitrate", it) }
                 putExtra("useScreenCapture", useScreenCapture)
                 if (useScreenCapture) {

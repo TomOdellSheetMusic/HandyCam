@@ -58,6 +58,10 @@ class StreamStateHolder @Inject constructor() {
     val useHevc: StateFlow<Boolean> = _useHevc.asStateFlow()
     fun setUseHevc(value: Boolean) { _useHevc.value = value }
 
+    private val _useHdr = MutableStateFlow(false)
+    val useHdr: StateFlow<Boolean> = _useHdr.asStateFlow()
+    fun setUseHdr(value: Boolean) { _useHdr.value = value }
+
     private val _avcBitrate = MutableStateFlow(-1)
     val avcBitrate: StateFlow<Int> = _avcBitrate.asStateFlow()
 

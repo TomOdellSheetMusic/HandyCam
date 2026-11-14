@@ -5,6 +5,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 ## Features
 - Select any quality settings your camera supports
 - Stream low latency video to OBS
+- MJPEG, H.264 and HEVC/H.265 video, with optional HLG10 HDR camera capture on supported devices
 - Stream audio to OBS
 - Stream screen to OBS
 - Automatic Discovery of running HandyCam Servers in the Droidcam OBS Plugin
@@ -19,13 +20,14 @@ Note: It's not possible to start the camera stream from the api if the app is no
 Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
 Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
 
+For HDR, select HEVC and HDR in HandyCam before starting the camera stream, then select HEVC and enable HDR in the DroidCam OBS source. HDR requires Android 13 or newer, an HLG10-capable camera, and a compatible HEVC Main10 encoder at the chosen settings. Camera preview and screen capture are unavailable in HDR mode. The HDR option resets when the app process restarts.
+
 ## Tested with
 - Samsung S22 Android 15
 - Samsung S20 Android 12
 - Samsung A50 Android 11
 
 ## ToDo
-- Implement new HEVC feature from droidcam plugin
 - Clean up Code
 - Remote Control Camera Focus
 - Auto-Disover Phone Camera Capabilites
