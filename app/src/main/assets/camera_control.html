@@ -249,9 +249,11 @@
             <div class="card-title">Exposure</div>
             <div class="control-row">
                 <label>Compensation</label>
-                <input type="range" id="exposureSlider" min="-50" max="50" value="0" oninput="setExposure(this.value)">
-                <span class="val-label"><span id="exposureValue">0</span></span>
+                <input type="range" id="exposureSlider" min="0" max="0" value="0" oninput="setExposure(this.value)" onchange="editingSettings.delete('exposure')" disabled>
+                <span class="val-label" id="exposureValue">0 EV</span>
             </div>
+            <div id="exposureNote">Exposure compensation changes the camera's brightness target. In low light, the camera may already be at its exposure limit.</div>
+            <button class="toggle-btn" id="exposureLockBtn" onclick="toggleExposureLock()" hidden>Lock exposure</button>
         </div>
 
         <div class="card" id="zoomCard">
@@ -270,7 +272,6 @@
             <div id="torchNote">Torch only works while stream is active</div>
             <div>Stop the stream to change codec.</div>
             <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">Codec: MJPEG</button>
-            <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">Auto Exposure: ON</button>
         </div>
 
         <div class="card">
@@ -330,6 +331,7 @@
         async function checkCameraSettings() {
             const zoomVersionAtRequest = zoomVersion;
             try {
+                const exposureVersionAtRequest = exposureVersion;
                 const response = await fetch('/api/camera/status');
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
@@ -397,24 +399,27 @@
                     jpegCard.style.display = '';
                 }
 
-                document.getElementById('exposureSlider').value = data.exposure;
-                document.getElementById('exposureValue').textContent = data.exposure;
-
-                // auto exposure visibility
-                const autoExposureEnabledLocal = data.autoExposure === true;
-                // When auto-exposure is enabled, hide manual exposure slider
-                if (autoExposureEnabledLocal) {
-                    document.getElementById('exposureCard').style.display = 'none';
-                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: ON';
-                    document.getElementById('autoExposureBtn').classList.add('active');
-                } else {
-                    document.getElementById('exposureCard').style.display = '';
-                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: OFF';
-                    document.getElementById('autoExposureBtn').classList.remove('active');
+                const slider = document.getElementById('exposureSlider');
+                exposureStep = data.exposureStep || 0;
+                slider.min = data.exposureMin ?? 0;
+                slider.max = data.exposureMax ?? 0;
+                const unsupported = Number(slider.min) === Number(slider.max);
+                const locked = data.useAvc && data.autoExposure === false;
+                slider.disabled = !data.streaming || unsupported || locked;
+                const exposureLockBtn = document.getElementById('exposureLockBtn');
+                exposureLockBtn.hidden = !data.useAvc || !data.streaming;
+                exposureLockBtn.textContent = locked ? 'Unlock exposure' : 'Lock exposure';
+                exposureLockBtn.disabled = exposureLockRequestInFlight;
+                autoExposureEnabled = data.autoExposure !== false;
+                document.getElementById('exposureNote').textContent = !data.streaming ?
+                    'Start camera streaming to adjust exposure.' : unsupported ?
+                    'Exposure compensation is not available for this camera.' : locked ?
+                    'Exposure is locked. Unlock it to adjust compensation.' :
+                    "Compensation changes the camera's brightness target. In low light, the camera may already be at its exposure limit.";
+                if (!editingSettings.has('exposure') && !exposureRequestInFlight && pendingExposure === null && exposureVersionAtRequest === exposureVersion) {
+                    slider.value = data.exposure;
+                    document.getElementById('exposureValue').textContent = formatExposure(data.exposure);
                 }
-
-                // remember auto flags for UI
-                window.autoExposureEnabled = autoExposureEnabledLocal;
 
                 // Toggles
                 torchEnabled = data.torchEnabled === true;
@@ -429,7 +434,6 @@
 
         function updateToggleButtons() {
             const torchBtn = document.getElementById('torchBtn');
-            const autoExposureBtn = document.getElementById('autoExposureBtn');
             const useAvcBtn = document.getElementById('useAvcBtn');
 
             if (torchEnabled) {
@@ -541,19 +545,67 @@
             return applySetting('/api/settings/jpeg-quality', { quality: Number(document.getElementById('jpegSlider').value) }, 'jpeg', document.getElementById('applyJpegBtn'));
         }
 
-        async function setExposure(exposure) {
-            document.getElementById('exposureValue').textContent = exposure;
+        let exposureStep = 0;
+        let autoExposureEnabled = true;
+        let exposureLockRequestInFlight = false;
+        let exposureRequestInFlight = false;
+        let pendingExposure = null;
+        let exposureVersion = 0;
+
+        async function toggleExposureLock() {
+            if (exposureLockRequestInFlight) return;
+            exposureLockRequestInFlight = true;
+            const button = document.getElementById('exposureLockBtn');
+            button.disabled = true;
             try {
-                const response = await fetch('/api/settings/exposure', {
+                const response = await fetch('/api/settings/auto-exposure', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ exposure: parseInt(exposure) })
+                    body: JSON.stringify({ enabled: !autoExposureEnabled })
                 });
                 const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
+                if (!response.ok || !data.success) showMessage(data.message || 'Failed to change exposure lock', false);
             } catch (e) {
-                showMessage('Failed to set exposure: ' + e.message, false);
+                showMessage('Failed to change exposure lock: ' + e.message, false);
+            } finally {
+                exposureLockRequestInFlight = false;
+                button.disabled = false;
+                checkCameraSettings();
             }
+        }
+
+        function formatExposure(index) {
+            if (!(exposureStep > 0)) return `Step ${index}`;
+            const ev = Number(index) * exposureStep;
+            return `${ev > 0 ? '+' : ''}${ev.toFixed(2)} EV`;
+        }
+
+        function setExposure(exposure) {
+            editingSettings.add('exposure');
+            exposureVersion++;
+            pendingExposure = Number(exposure);
+            document.getElementById('exposureValue').textContent = formatExposure(pendingExposure);
+            if (!exposureRequestInFlight) sendPendingExposure();
+        }
+
+        async function sendPendingExposure() {
+            exposureRequestInFlight = true;
+            while (pendingExposure !== null) {
+                const value = pendingExposure;
+                pendingExposure = null;
+                try {
+                    const response = await fetch('/api/settings/exposure', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ exposure: value })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || !data.success) showMessage(data.message || 'Failed to set exposure', false);
+                } catch (e) {
+                    showMessage('Failed to set exposure: ' + e.message, false);
+                }
+            }
+            exposureRequestInFlight = false;
         }
 
         let zoomRequestInFlight = false;

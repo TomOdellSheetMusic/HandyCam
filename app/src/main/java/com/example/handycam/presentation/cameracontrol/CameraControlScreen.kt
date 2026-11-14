@@ -97,6 +97,7 @@ fun CameraControlScreen(
     val encoderHeight by viewModel.encoderHeight.collectAsState()
     val avcExposureMin by viewModel.exposureMin.collectAsState()
     val avcExposureMax by viewModel.exposureMax.collectAsState()
+    val avcExposureStep by viewModel.exposureStep.collectAsState()
 
     var showEvLabel by remember { mutableStateOf(false) }
     var focusRingVisible by remember { mutableStateOf(false) }
@@ -467,7 +468,12 @@ fun CameraControlScreen(
                 shape = MaterialTheme.shapes.small
             ) {
                 Text(
-                    text = if (exposure >= 0) "EV +$exposure" else "EV $exposure",
+                    text = run {
+                        val step = if (useAvc) avcExposureStep else
+                            viewModel.cameraStateHolder.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
+                        if (step > 0f) "Exposure %+.1f EV".format(java.util.Locale.US, exposure * step)
+                        else "Exposure step $exposure"
+                    },
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

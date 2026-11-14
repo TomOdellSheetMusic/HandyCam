@@ -47,6 +47,7 @@ class CameraControlViewModel @Inject constructor(
     val encoderHeight: StateFlow<Int> = cameraStateHolder.encoderHeight
     val exposureMin: StateFlow<Int> = cameraStateHolder.exposureMin
     val exposureMax: StateFlow<Int> = cameraStateHolder.exposureMax
+    val exposureStep: StateFlow<Float> = cameraStateHolder.exposureStep
 
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
     val availableCameras: StateFlow<List<CameraInfo>> = _availableCameras.asStateFlow()
