@@ -3,7 +3,10 @@ package com.example.handycam.presentation.main
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -26,8 +29,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
+import kotlin.math.roundToInt
 
-private val FPS_OPTIONS = listOf("15", "30", "60")
+private val FPS_OPTIONS = listOf(15, 30, 60, 120, 240)
 
 private data class ResolutionPreset(val label: String, val width: Int, val height: Int)
 private val RESOLUTION_PRESETS = listOf(
@@ -73,7 +77,6 @@ fun MainScreen(
     val selectedCamera = remember(cameras, selectedCameraId) {
         cameras.firstOrNull { it.id == selectedCameraId }
     }
-    val selectedFps = fpsValue.toString()
     var jpegQuality by remember(jpegQualityValue) { mutableFloatStateOf(jpegQualityValue.toFloat()) }
     var avcBitrate by remember(avcBitrateValue) {
         mutableStateOf(if (avcBitrateValue > 0) (avcBitrateValue / 1_000_000f).toString() else "")
@@ -82,6 +85,12 @@ fun MainScreen(
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
     val isScreenSource = isScreenStreaming
+    val maxFps = remember(selectedCameraId, width, height, useAvc, isScreenSource) {
+        if (isScreenSource) 60 else viewModel.maxStreamingFps(selectedCameraId, width, height, useAvc)
+    }
+    LaunchedEffect(maxFps, fpsValue, isStreaming) {
+        if (!isStreaming && fpsValue > maxFps) viewModel.updateFps(maxFps)
+    }
     LaunchedEffect(width, height) {
         if (selectedPreset.label != "Custom") {
             selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
@@ -221,6 +230,7 @@ fun MainScreen(
                         )
                     }
                 }
+
                 if (selectedPreset.label == "Custom") {
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -260,16 +270,38 @@ fun MainScreen(
                 // FPS
                 Text("Frame rate", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    FPS_OPTIONS.forEachIndexed { i, fps ->
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(i, FPS_OPTIONS.size),
-                            selected = selectedFps == fps,
-                            onClick = { if (!isStreaming) viewModel.updateFps(fps.toInt()) },
-                            label = { Text("${fps}fps") }
+                val fpsPresets = (FPS_OPTIONS.filter { it <= maxFps } + maxFps).distinct().sorted()
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    fpsPresets.forEach { fps ->
+                        FilterChip(
+                            selected = fpsValue == fps,
+                            onClick = { viewModel.updateFps(fps) },
+                            label = { Text("$fps fps") },
+                            enabled = !isStreaming,
                         )
                     }
                 }
+                Text("Target: $fpsValue fps", style = MaterialTheme.typography.bodyMedium)
+                Slider(
+                    value = fpsValue.coerceIn(1, maxFps).toFloat(),
+                    onValueChange = { value ->
+                        val fps = value.roundToInt().coerceIn(1, maxFps)
+                        if (fps != fpsValue) viewModel.updateFps(fps)
+                    },
+                    valueRange = 1f..maxFps.toFloat(),
+                    enabled = !isStreaming,
+                    thumb = {
+                        Box(Modifier.size(20.dp).background(
+                            if (isStreaming) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            else MaterialTheme.colorScheme.primary,
+                            CircleShape,
+                        ))
+                    },
+                )
+                Text("1–$maxFps fps · Actual frame rate may vary", style = MaterialTheme.typography.bodySmall)
 
                 Spacer(Modifier.height(4.dp))
 
