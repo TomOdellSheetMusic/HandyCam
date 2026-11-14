@@ -89,7 +89,7 @@ jobs:
           mv "$AAB" "$OUT/bundle/release/HandyCam-${VERSION}-universal.aab"
 
       - name: Attest Android bundles
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             app/build/outputs/apk/release/*.apk

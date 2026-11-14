@@ -95,7 +95,7 @@ jobs:
           mv "$APK" "$OUT/HandyCam-${VERSION_NAME}-universal.apk"
 
       - name: Attest nightly APK
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: app/build/outputs/apk/release/*.apk
 
