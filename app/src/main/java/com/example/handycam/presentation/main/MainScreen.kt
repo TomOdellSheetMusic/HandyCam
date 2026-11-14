@@ -383,6 +383,11 @@ fun MainScreen(
             }
 
             // ── Start / Stop ──────────────────────────────────────────
+            Text(
+                "Anyone on the network who can reach this device can access the video and audio stream. Use a trusted network.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
             Button(
                 onClick = {
                     if (isStreaming) viewModel.stopStreaming()
@@ -432,7 +437,7 @@ fun MainScreen(
             // ── HTTPS server ──────────────────────────────────────────
             SectionCard(title = "Web Control Server") {
                 Text(
-                    "Start an HTTP server to control the camera from a browser or the REST API.",
+                    "Anyone who can reach the HTTP Server can control the camera. Use a trusted network.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

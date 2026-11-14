@@ -73,7 +73,7 @@ jobs:
           EOF
 
       - name: Build release bundles
-        run: ./gradlew :app:assembleRelease :app:bundleRelease
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease :app:bundleRelease
 
       - name: Normalize artifact names
         env:
