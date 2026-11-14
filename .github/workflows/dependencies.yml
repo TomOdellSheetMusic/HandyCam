@@ -20,7 +20,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew
-      - run: ./gradlew :app:assembleDebug :app:testDebugUnitTest
+      - run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 
   review:
     if: github.event_name == 'pull_request'

@@ -270,11 +270,21 @@ class StreamService : LifecycleService() {
                     }
                 } catch (se: SecurityException) {
                     Log.e(TAG, "Unable to start foreground service: missing permission", se)
+                    notifyStreamingState(false)
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, streamingPort, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
-                    useScreenCapture, mpResultCode, mpData)
+                try {
+                    startStreaming(host, streamingPort, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
+                        useScreenCapture, mpResultCode, mpData)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unable to start streaming", e)
+                    stopStreaming()
+                    android.widget.Toast.makeText(this, "Unable to start streaming. Check permissions and settings.", android.widget.Toast.LENGTH_LONG).show()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 registerMdns(streamingPort)
                 // notify UI and persist state that streaming started
                 try {
@@ -556,6 +566,7 @@ class StreamService : LifecycleService() {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
     private fun applyWhiteBalance(mode: Int) {
         try {
             if (!useAvc) {
@@ -622,19 +633,11 @@ class StreamService : LifecycleService() {
 
         if (useScreenCapture) {
             if (useAvc) {
-                try {
-                    setupEncoder(w, h, targetFps)
-                    startEncoderOutputReader()
-                    startScreenCaptureAvc(mpResultCode, mpData!!)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start screen capture AVC pipeline", e)
-                }
+                setupEncoder(w, h, targetFps)
+                startEncoderOutputReader()
+                startScreenCaptureAvc(mpResultCode, requireNotNull(mpData))
             } else {
-                try {
-                    startScreenCaptureMjpeg(mpResultCode, mpData!!, w, h)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start screen capture MJPEG pipeline", e)
-                }
+                startScreenCaptureMjpeg(mpResultCode, requireNotNull(mpData), w, h)
             }
         } else if (useAvc) {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
@@ -644,9 +647,7 @@ class StreamService : LifecycleService() {
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
-                // fallback to MJPEG if AVC init fails
-                useAvc = false
-                stopCamera2()
+                throw e
             }
         } else {
             startCameraX(w, h)
@@ -670,8 +671,10 @@ class StreamService : LifecycleService() {
         }
 
         lifecycleScope.launch(Dispatchers.Main) {
+            try {
             val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
             val cameraProvider = cameraProviderFuture.get()
+            if (!running) return@launch
             // keep reference so we can rebind while streaming
             this@StreamService.cameraProvider = cameraProvider
 
@@ -733,6 +736,11 @@ class StreamService : LifecycleService() {
                 sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to bind camera use cases in service", e)
+                stopAfterStreamFailure("Could not start the selected camera")
+            }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize CameraX", e)
+                stopAfterStreamFailure("Could not initialize the camera")
             }
         }
     }
@@ -751,7 +759,7 @@ class StreamService : LifecycleService() {
                     Log.e(TAG, "Bind failed on 0.0.0.0:$port - address already in use", be)
                     server.close()
                     serverSocket = null
-                    running = false
+                    stopAfterStreamFailure("Streaming port $port is already in use")
                     return@Thread
                 }
 
@@ -847,7 +855,7 @@ class StreamService : LifecycleService() {
             mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
                     Log.i(TAG, "MediaProjection stopped by system")
-                    if (running) stopStreaming()
+                    if (running) stopAfterStreamFailure("Screen sharing stopped")
                 }
             }, screenCaptureHandler)
         }
@@ -903,10 +911,7 @@ class StreamService : LifecycleService() {
         mediaProjection = mgr.getMediaProjection(resultCode, data)
 
         val density = resources.displayMetrics.densityDpi
-        val surface = encoderInputSurface ?: run {
-            Log.e(TAG, "Encoder input surface is null for screen capture AVC")
-            return
-        }
+        val surface = checkNotNull(encoderInputSurface) { "Encoder input surface is unavailable" }
 
         // Android 14+ requires a callback to be registered before createVirtualDisplay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -917,7 +922,7 @@ class StreamService : LifecycleService() {
             mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
                     Log.i(TAG, "MediaProjection stopped by system")
-                    if (running) stopStreaming()
+                    if (running) stopAfterStreamFailure("Screen sharing stopped")
                 }
             }, screenCaptureHandler!!)
         }
@@ -1358,18 +1363,14 @@ class StreamService : LifecycleService() {
             cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         } catch (e: Exception) {
             Log.e(TAG, "CameraManager not available", e)
-            return
+            throw e
         }
 
         cameraHandlerThread = HandlerThread("Camera2Thread").also { it.start() }
         cameraHandler = Handler(cameraHandlerThread!!.looper)
 
         // pick camera id
-        val camId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
-        if (camId == null) {
-            Log.e(TAG, "No camera id found for selector $selectedCamera")
-            return
-        }
+        val camId = checkNotNull(findCameraId(selectedCamera)) { "No camera found for $selectedCamera" }
 
         // determine a supported output size for the camera for encoder surface
         var chosenWidth = reqWidth
@@ -1601,6 +1602,7 @@ class StreamService : LifecycleService() {
         return null
     }
 
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
     private fun buildCameraSelectorForId(cameraId: String, physicalId: String? = null): CameraSelector? {
         // For CameraX 1.1+, we can use addCameraFilter to select specific physical cameras
         // by checking against Camera2 characteristics
@@ -1796,8 +1798,24 @@ class StreamService : LifecycleService() {
             PhysicalLens.parse(selectedCamera)?.second?.let { setPhysicalCameraId(it) }
         }
 
+    private fun stopAfterStreamFailure(message: String) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            if (!running) return@launch
+            Log.e(TAG, message)
+            unregisterMdns()
+            stopStreaming()
+            android.widget.Toast.makeText(this@StreamService, message, android.widget.Toast.LENGTH_LONG).show()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
     private fun failCamera2Switch(message: String) {
-        val previous = cameraBeforeSwitch ?: return
+        val previous = cameraBeforeSwitch
+        if (previous == null) {
+            stopAfterStreamFailure(message)
+            return
+        }
         cameraBeforeSwitch = null
         selectedCamera = previous
         streamStateHolder.setCameraSwitchStatus(message)

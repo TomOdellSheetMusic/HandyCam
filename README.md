@@ -15,6 +15,10 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 
 Note: It's not possible to start the camera stream from the api if the app is not in the foreground <br>
 
+## Network privacy
+
+Use HandyCam only on a trusted network. While streaming, any device that can reach the streaming port can access the video and audio without authentication or encryption. The optional web control server also uses unauthenticated HTTP. Anyone who can reach it can control the camera. USB connections do not disable the Wi-Fi listener. Stop streaming and the web control server when they are not needed.
+
 ## Installation
 Either use the [compiled APK](https://github.com/TomOdellSheetMusic/HandyCam/releases) from the releases tab or build it yourself with the magic of open source! <br>
 Then install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
