@@ -1381,7 +1381,8 @@ class StreamService : LifecycleService() {
             val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
             val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
-                cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper)
+                val exposureStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+                cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper, exposureStep)
             } else {
                 cameraStateHolder.setExposureRange(0, 0)
             }

@@ -35,7 +35,11 @@ data class CameraStatusResponse(
     val zoomLocked: Boolean,
     val torchEnabled: Boolean,
     val autoFocus: Boolean,
+    val autoExposure: Boolean,
     val exposure: Int,
+    val exposureMin: Int,
+    val exposureMax: Int,
+    val exposureStep: Float,
     val avcBitrate: Int
 )
 

@@ -214,6 +214,11 @@ class KtorHttpServerService : LifecycleService() {
                 val chars = try { id?.let { cm.getCameraCharacteristics(it) } } catch (_: Exception) { null }
                 val range = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
                 val cameraZoom = if (!streamStateHolder.useAvc.value) cameraStateHolder.cameraInfo?.zoomState?.value else null
+                val cameraExposure = if (!streamStateHolder.useAvc.value) cameraStateHolder.cameraInfo?.exposureState else null
+                val exposureRange = cameraExposure?.exposureCompensationRange
+                    ?: chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+                val exposureStep = cameraExposure?.exposureCompensationStep?.toFloat()
+                    ?: chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
                 val minZoom = cameraZoom?.minZoomRatio ?: range?.lower ?: 1f
                 val maxZoom = cameraZoom?.maxZoomRatio ?: range?.upper ?: chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
                 val linear = streamStateHolder.zoom.value
@@ -237,7 +242,11 @@ class KtorHttpServerService : LifecycleService() {
                     zoomLocked = (streamStateHolder.zoomLocked.value),
                     torchEnabled = (streamStateHolder.torchEnabled.value),
                     autoFocus = (streamStateHolder.autoFocus.value),
+                    autoExposure = (streamStateHolder.autoExposure.value),
                     exposure = (streamStateHolder.exposure.value),
+                    exposureMin = exposureRange?.lower ?: 0,
+                    exposureMax = exposureRange?.upper ?: 0,
+                    exposureStep = exposureStep,
                     avcBitrate = (streamStateHolder.avcBitrate.value)
                 )
                 call.respond(status)
@@ -523,6 +532,21 @@ class KtorHttpServerService : LifecycleService() {
                     call.respond(ApiResponse(true, "Exposure updated to $exposure"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid exposure value: ${e.message}"))
+                }
+            }
+
+            post("/api/settings/auto-exposure") {
+                try {
+                    val params = call.receive<Map<String, Boolean>>()
+                    val enabled = params["enabled"] ?: throw IllegalArgumentException("Missing enabled")
+                    if (!streamStateHolder.useAvc.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Exposure lock is available in AVC mode"))
+                        return@post
+                    }
+                    streamStateHolder.setAutoExposure(enabled)
+                    call.respond(ApiResponse(true, if (enabled) "Exposure unlocked" else "Exposure locked"))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid auto-exposure value: ${e.message}"))
                 }
             }
 
