@@ -209,7 +209,7 @@ class KtorHttpServerService : LifecycleService() {
                     PhysicalLens.parse(selection)?.second ?: cm.cameraIdList.firstOrNull { id ->
                         id == selection || (selection == "back" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) ||
                             (selection == "front" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT)
-                    }
+                    }?.let { VirtualLens.resolve(cm, it).cameraId }
                 } catch (_: Exception) { null }
                 val chars = try { id?.let { cm.getCameraCharacteristics(it) } } catch (_: Exception) { null }
                 val range = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
