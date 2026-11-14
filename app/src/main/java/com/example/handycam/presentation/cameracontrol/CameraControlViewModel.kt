@@ -144,6 +144,9 @@ class CameraControlViewModel @Inject constructor(
     }
 
     fun setPreviewSurfaceProvider(provider: Preview.SurfaceProvider?): Long {
+        if (provider != null && cameraStateHolder.previewSurfaceProvider === provider) {
+            return previewProviderToken
+        }
         val token = if (provider != null) {
             previewProviderToken += 1
             previewProviderToken
