@@ -219,6 +219,7 @@ class StreamService : LifecycleService() {
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
                 useAvc = intent.getBooleanExtra("useAvc", false)
+                setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
                 useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
@@ -728,6 +729,7 @@ class StreamService : LifecycleService() {
                 // Store camera control for preview activity
                 cameraStateHolder.cameraControl = camera.cameraControl
                 cameraStateHolder.cameraInfo = camera.cameraInfo
+                camera.cameraControl.setLinearZoom(streamStateHolder.zoom.value)
                 camera.cameraControl.enableTorch(streamStateHolder.torchEnabled.value)
 
                 Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
@@ -1586,6 +1588,9 @@ class StreamService : LifecycleService() {
     private fun findCameraId(sel: String): String? {
         PhysicalLens.parse(sel)?.let { return it.first }
         val mgr = cameraManager ?: return null
+        if (sel != "back" && sel != "front" && sel in mgr.cameraIdList) {
+            return VirtualLens.resolve(mgr, sel).cameraId
+        }
         try {
             for (id in mgr.cameraIdList) {
                 try {
@@ -1600,6 +1605,27 @@ class StreamService : LifecycleService() {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    private fun setInitialLensZoom(selection: String, avc: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            streamStateHolder.setZoom(0f)
+            return
+        }
+        val zoom = try {
+            val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val lens = VirtualLens.resolve(manager, selection)
+            if (PhysicalLens.parse(selection) != null) 0f else {
+                val cameraId = if (selection == "front" || selection == "back") {
+                    val facing = if (selection == "front") CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+                    manager.cameraIdList.firstOrNull { manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == facing }
+                } else lens.cameraId
+                val range = cameraId?.let { manager.getCameraCharacteristics(it) }
+                    ?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (range == null) 0f else VirtualLens.normalizedZoom(lens.zoomRatio, range.lower, range.upper, avc)
+            }
+        } catch (_: Exception) { 0f }
+        streamStateHolder.setZoom(zoom)
     }
 
     @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
@@ -1659,7 +1685,7 @@ class StreamService : LifecycleService() {
         }
         cameraBeforeSwitch = selectedCamera
         selectedCamera = newCam
-        streamStateHolder.setZoom(0f)
+        setInitialLensZoom(newCam, useAvc)
 
         if (useAvc) {
             // For AVC path, stop camera session but keep encoder surface, then reopen camera
@@ -1679,6 +1705,7 @@ class StreamService : LifecycleService() {
                     val provider = cameraProvider ?: run {
                         Log.w(TAG, "CameraProvider not available when switching camera")
                         selectedCamera = cameraBeforeSwitch ?: selectedCamera
+                        setInitialLensZoom(selectedCamera, useAvc)
                         cameraBeforeSwitch = null
                         streamStateHolder.setCameraSwitchStatus("Camera is not ready")
                         return@launch
@@ -1706,7 +1733,7 @@ class StreamService : LifecycleService() {
                         val camera = provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
                         cameraStateHolder.cameraControl = camera.cameraControl
                         cameraStateHolder.cameraInfo = camera.cameraInfo
-                        try { cameraStateHolder.cameraControl?.setLinearZoom(0f) } catch (_: Exception) {}
+                        try { cameraStateHolder.cameraControl?.setLinearZoom(streamStateHolder.zoom.value) } catch (_: Exception) {}
                         streamStateHolder.setCamera(selectedCamera)
                         cameraBeforeSwitch = null
                         streamStateHolder.setCameraSwitchStatus("")
@@ -1718,6 +1745,7 @@ class StreamService : LifecycleService() {
                     cameraBeforeSwitch = null
                     if (previous != null) {
                         selectedCamera = previous
+                        setInitialLensZoom(previous, useAvc)
                         rebindCameraXUseCases()
                     }
                     streamStateHolder.setCameraSwitchStatus("Failed to select camera: ${e.message ?: "unsupported configuration"}")
@@ -1818,6 +1846,7 @@ class StreamService : LifecycleService() {
         }
         cameraBeforeSwitch = null
         selectedCamera = previous
+        setInitialLensZoom(previous, useAvc)
         streamStateHolder.setCameraSwitchStatus(message)
         lifecycleScope.launch(Dispatchers.Main) {
             try {
