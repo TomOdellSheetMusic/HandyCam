@@ -133,9 +133,9 @@ jobs:
             gh release delete-asset nightly "$name" --yes
           done < old-apks.txt
 
-      - name: Update nightly release version
+      - name: Update nightly release details
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
           GIT_SHA: ${{ github.sha }}
-        run: gh release edit nightly --title "$VERSION_NAME" --notes "Rolling nightly build from dev — $GIT_SHA"
+        run: gh release edit nightly --title "Nightly (dev)" --notes "Nightly $VERSION_NAME from dev — $GIT_SHA"

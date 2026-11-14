@@ -19,7 +19,7 @@ $versionName = if ($ChannelOrTag -eq 'nightly') {
         throw 'A release tag and commit hash are required for nightly builds'
     }
     $base = $BaseVersion -replace '^v', ''
-    "$base+$($CommitSha.Substring(0, 7).ToLowerInvariant())"
+    "$base.$($CommitSha.Substring(0, 7).ToLowerInvariant())"
 } elseif ($ChannelOrTag.StartsWith('v')) {
     $ChannelOrTag.Substring(1)
 } else {
