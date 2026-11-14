@@ -13,15 +13,17 @@ import kotlin.math.roundToInt
 /** Rates supported at the selected resolution by regular or AVC high-speed sessions. */
 object FrameRateCapabilities {
     data class Limits(val regular: Int, val highSpeed: Int) {
-        val maximum: Int get() = maxOf(60, regular, highSpeed)
+        val maximum: Int get() = maxOf(regular, highSpeed)
         fun needsHighSpeed(fps: Int): Boolean = fps > regular && fps <= highSpeed
     }
+    fun clampTarget(fps: Int, maximum: Int): Int = fps.coerceIn(1, maximum.coerceAtLeast(1))
     fun selectRange(ranges: List<Range<Int>>, fps: Int): Range<Int>? =
         ranges.filter { it.upper >= fps }
             .minWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
 
     fun limits(manager: CameraManager, selection: String, width: Int, height: Int, avc: Boolean): Limits {
-        val fallback = Limits(60, 60)
+        // A conservative target when Android does not report usable stream metadata.
+        val fallback = Limits(30, 0)
         return try {
             if (width <= 0 || height <= 0) return fallback
             val physical = PhysicalLens.parse(selection)
@@ -47,20 +49,20 @@ object FrameRateCapabilities {
             val regular = try {
                 val yuvSizes = map.getOutputSizes(ImageFormat.YUV_420_888) ?: emptyArray()
                 val surfaceSizes = if (avc) map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray() else emptyArray()
-                if (size !in yuvSizes || (avc && size !in surfaceSizes)) 60 else {
+                if (size !in yuvSizes || (avc && size !in surfaceSizes)) 30 else {
                     val durations = mutableListOf(map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, size))
                     if (avc) durations.add(map.getOutputMinFrameDuration(SurfaceTexture::class.java, size))
-                    val limit = if (durations.any { it <= 0 }) 60 else (1_000_000_000.0 / durations.max()).roundToInt()
+                    val limit = if (durations.any { it <= 0 }) 30 else (1_000_000_000.0 / durations.max()).roundToInt()
                     logical.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.map { it.upper }
-                        ?.filter { it > 60 && it <= limit && encoderSupports(it) }?.maxOrNull() ?: 60
+                        ?.map { minOf(it, limit) }?.filter { it > 0 && encoderSupports(it) }?.maxOrNull() ?: 30
                 }
-            } catch (_: Exception) { 60 }
+            } catch (_: Exception) { 30 }
             val highSpeed = if (avc && physical == null) try {
                 if (size in map.highSpeedVideoSizes) {
                     map.getHighSpeedVideoFpsRangesFor(size).map { it.upper }
-                        .filter { it > 60 && encoderSupports(it) }.maxOrNull() ?: 60
-                } else 60
-            } catch (_: Exception) { 60 } else 60
+                        .filter { it > 60 && encoderSupports(it) }.maxOrNull() ?: 0
+                } else 0
+            } catch (_: Exception) { 0 } else 0
             Limits(regular, highSpeed)
         } catch (_: Exception) { fallback }
     }

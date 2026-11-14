@@ -415,11 +415,9 @@ class KtorHttpServerService : LifecycleService() {
                         call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Camera is not available"))
                         return@post
                     }
-                    if (streamStateHolder.isStreaming.value && streamStateHolder.fps.value > 60 &&
-                        streamStateHolder.fps.value > FrameRateCapabilities.maxStreamingFps(manager, camera, streamStateHolder.width.value, streamStateHolder.height.value, streamStateHolder.useAvc.value)) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop the stream and select a lower frame rate before switching cameras"))
-                        return@post
-                    }
+                    val maxFps = FrameRateCapabilities.maxStreamingFps(manager, camera, streamStateHolder.width.value, streamStateHolder.height.value, streamStateHolder.useAvc.value)
+                    val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
+                    val reduced = adjustedFps < streamStateHolder.fps.value
                     val intent = Intent(this@KtorHttpServerService, StreamService::class.java).apply {
                         action = StreamActions.SET_CAMERA
                         putExtra("camera", camera)
@@ -434,12 +432,13 @@ class KtorHttpServerService : LifecycleService() {
                             streamStateHolder.setCameraSwitchStatus("Could not start camera switch")
                             throw e
                         }
-                        call.respond(ApiResponse(true, "Switching camera?"))
+                        call.respond(ApiResponse(true, if (reduced) "Switching camera and reducing target to $adjustedFps fps" else "Switching camera"))
                     } else {
                         streamStateHolder.setCamera(camera)
+                        streamStateHolder.setFps(adjustedFps)
                         streamStateHolder.setCameraSwitchStatus("")
                         streamStateHolder.setZoom(0f)
-                        call.respond(ApiResponse(true, "Camera selection updated"))
+                        call.respond(ApiResponse(true, if (reduced) "Camera updated; target reduced to $adjustedFps fps" else "Camera selection updated"))
                     }
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to switch camera: ${e.message}"))
@@ -468,14 +467,14 @@ class KtorHttpServerService : LifecycleService() {
                     val width = params["width"] ?: 1080
                     val height = params["height"] ?: 1920
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    if (streamStateHolder.fps.value > 60 && streamStateHolder.fps.value >
-                        FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, width, height, streamStateHolder.useAvc.value)) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Lower the frame rate before changing resolution"))
-                        return@post
-                    }
+                    val maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
+                        FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, width, height, streamStateHolder.useAvc.value)
+                    val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
+                    val reduced = adjustedFps < streamStateHolder.fps.value
                     streamStateHolder.setWidth(width)
                     streamStateHolder.setHeight(height)
-                    call.respond(ApiResponse(true, "Resolution updated to ${width}x${height}"))
+                    streamStateHolder.setFps(adjustedFps)
+                    call.respond(ApiResponse(true, "Resolution updated to ${width}x${height}" + if (reduced) "; target reduced to $adjustedFps fps" else ""))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid resolution: ${e.message}"))
                 }
@@ -501,13 +500,13 @@ class KtorHttpServerService : LifecycleService() {
                         return@post
                     }
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    if (streamStateHolder.fps.value > 60 && streamStateHolder.fps.value >
-                        FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, streamStateHolder.width.value, streamStateHolder.height.value, enabled)) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Lower the frame rate before changing codec"))
-                        return@post
-                    }
+                    val maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
+                        FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, streamStateHolder.width.value, streamStateHolder.height.value, enabled)
+                    val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
+                    val reduced = adjustedFps < streamStateHolder.fps.value
                     streamStateHolder.setUseAvc(enabled)
-                    call.respond(ApiResponse(true, "useAvc set to $enabled"))
+                    streamStateHolder.setFps(adjustedFps)
+                    call.respond(ApiResponse(true, "useAvc set to $enabled" + if (reduced) "; target reduced to $adjustedFps fps" else ""))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid use-avc value: ${e.message}"))
                 }
