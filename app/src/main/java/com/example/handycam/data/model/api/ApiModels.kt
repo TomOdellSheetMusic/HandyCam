@@ -21,6 +21,8 @@ data class CameraStatusResponse(
     val streaming: Boolean,
     val port: Int,
     val camera: String,
+    val cameraSwitchStatus: String,
+    val requestedCamera: String,
     val width: Int,
     val height: Int,
     val fps: Int,
@@ -42,5 +44,6 @@ data class CameraListItem(
     val id: String,
     val label: String,
     val facing: String,
-    val focalDesc: String
+    val focalDesc: String,
+    val sensorId: String = ""
 )

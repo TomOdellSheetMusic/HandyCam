@@ -206,7 +206,7 @@ class KtorHttpServerService : LifecycleService() {
                 val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
                 val selection = streamStateHolder.camera.value
                 val id = try {
-                    cm.cameraIdList.firstOrNull { id ->
+                    PhysicalLens.parse(selection)?.second ?: cm.cameraIdList.firstOrNull { id ->
                         id == selection || (selection == "back" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) ||
                             (selection == "front" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT)
                     }
@@ -223,6 +223,8 @@ class KtorHttpServerService : LifecycleService() {
                     streaming = (streamStateHolder.isStreaming.value),
                     port = (streamStateHolder.streamingPort.value),
                     camera = (streamStateHolder.camera.value),
+                    cameraSwitchStatus = streamStateHolder.cameraSwitchStatus.value,
+                    requestedCamera = streamStateHolder.requestedCamera.value,
                     width = (streamStateHolder.width.value),
                     height = (streamStateHolder.height.value),
                     fps = (streamStateHolder.fps.value),
@@ -243,37 +245,60 @@ class KtorHttpServerService : LifecycleService() {
 
             get("/api/camera/list") {
                 val list = mutableListOf<CameraListItem>()
-                // CameraManager exposes camera IDs that can be opened independently.
-
+                val seenPhysicalIds = mutableSetOf<String>()
                 try {
-                    val cm = this@KtorHttpServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    cm.cameraIdList.forEach { id ->
+                    val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    for (id in cm.cameraIdList) {
                         try {
                             val chars = cm.getCameraCharacteristics(id)
                             val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
                                 CameraCharacteristics.LENS_FACING_FRONT -> "front"
                                 CameraCharacteristics.LENS_FACING_BACK -> "back"
-                                else -> "unknown"
+                                else -> "external"
                             }
-                            val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) String.format("f=%.1fmm", focalArr[0]) else ""
-                            val focal = focalArr?.firstOrNull()
-                            val name = when {
-                                facing == "front" -> "Front"
-                                facing == "back" && focal != null && focal < 3f -> "Ultra-wide"
-                                facing == "back" && focal != null && focal > 10f -> "Telephoto"
-                                facing == "back" -> "Wide"
-                                else -> "Camera"
+                            fun addEntry(key: String, cameraId: String, logical: Boolean) {
+                                if (!logical && cameraId in seenPhysicalIds) return
+                                val info = cm.getCameraCharacteristics(cameraId)
+                                val focal = info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+                                val focalDesc = focal?.let { String.format(java.util.Locale.US, "%.1f mm", it) } ?: ""
+                                val size = info.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                                val equivalent = if (focal != null && size != null && size.width > 0f && size.height > 0f)
+                                    focal * 43.27f / kotlin.math.sqrt(size.width * size.width + size.height * size.height) else null
+                                val name = when {
+                                    logical && facing == "back" -> "Back (auto)"
+                                    logical && facing == "front" -> "Front (auto)"
+                                    logical -> "External (auto)"
+                                    facing == "front" -> "Front"
+                                    facing != "back" -> "External"
+                                    equivalent == null -> "Back camera"
+                                    equivalent < 20f -> "Ultra-wide (estimated)"
+                                    equivalent > 45f -> "Telephoto (estimated)"
+                                    else -> "Wide (estimated)"
+                                }
+                                if (!logical) seenPhysicalIds.add(cameraId)
+                                list.add(CameraListItem(key, name, facing, focalDesc, cameraId))
                             }
-                            val label = listOf(name, focalDesc, "ID $id").filter { it.isNotEmpty() }.joinToString(" ? ")
-                            list.add(CameraListItem(id, label, facing, focalDesc))
+                            addEntry(id, id, chars.physicalCameraIds.isNotEmpty())
+                            chars.physicalCameraIds.forEach { physical ->
+                                try { addEntry(PhysicalLens.key(id, physical), physical, false) } catch (_: Exception) { }
+                            }
                         } catch (_: Exception) { }
                     }
                 } catch (e: Exception) {
-                    // ignore camera enumeration failures
+                    Log.w(TAG, "Camera enumeration failed", e)
                 }
 
-                call.respond(list)
+                val totals = list.groupingBy { it.label }.eachCount()
+                val counts = mutableMapOf<String, Int>()
+                val labelled = list.map { item ->
+                    val name = if ((totals[item.label] ?: 0) <= 1) item.label else {
+                        val number = (counts[item.label] ?: 0) + 1
+                        counts[item.label] = number
+                        "${item.label} $number"
+                    }
+                    item.copy(label = listOf(name, item.focalDesc).filter { it.isNotEmpty() }.joinToString(" - "))
+                }
+                call.respond(labelled)
             }
             
             post("/api/camera/start") {
@@ -371,7 +396,7 @@ class KtorHttpServerService : LifecycleService() {
                     val params = call.receive<Map<String, String>>()
                     val camera = params["camera"] ?: throw IllegalArgumentException("Missing camera")
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    if (camera !in manager.cameraIdList && camera != "back" && camera != "front") {
+                    if (camera !in manager.cameraIdList && camera != "back" && camera != "front" && !PhysicalLens.valid(manager, camera)) {
                         call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Camera is not available"))
                         return@post
                     }
@@ -379,10 +404,23 @@ class KtorHttpServerService : LifecycleService() {
                         action = StreamActions.SET_CAMERA
                         putExtra("camera", camera)
                     }
-                    if (streamStateHolder.isStreaming.value) startService(intent)
-                    streamStateHolder.setCamera(camera)
-                    if (!streamStateHolder.isStreaming.value) streamStateHolder.setZoom(0f)
-                    call.respond(ApiResponse(true, "Camera selection updated"))
+                    if (streamStateHolder.isStreaming.value) {
+                        if (streamStateHolder.cameraSwitchStatus.value == "switching") {
+                            call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Camera switch already in progress"))
+                            return@post
+                        }
+                        streamStateHolder.setCameraSwitchStatus("switching", camera)
+                        try { startService(intent) } catch (e: Exception) {
+                            streamStateHolder.setCameraSwitchStatus("Could not start camera switch")
+                            throw e
+                        }
+                        call.respond(ApiResponse(true, "Switching camera?"))
+                    } else {
+                        streamStateHolder.setCamera(camera)
+                        streamStateHolder.setCameraSwitchStatus("")
+                        streamStateHolder.setZoom(0f)
+                        call.respond(ApiResponse(true, "Camera selection updated"))
+                    }
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to switch camera: ${e.message}"))
                 }

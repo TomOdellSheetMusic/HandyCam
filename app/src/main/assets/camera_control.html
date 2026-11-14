@@ -211,6 +211,7 @@
 
         <div class="card" id="cameraList">
             <div class="card-title">Camera Selection</div>
+            <div id="cameraSwitchStatus" role="status"></div>
             <div class="camera-btn-row" id="cameraButtons">Loading...</div>
         </div>
 
@@ -255,6 +256,7 @@
 
         <div class="card" id="zoomCard">
             <div class="card-title">Zoom</div>
+            <div>Zoom ratio is relative to the selected camera.</div>
             <div class="control-row">
                 <label>Zoom</label>
                 <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)">
@@ -279,7 +281,16 @@
         let torchEnabled = false;
         let avcEnabled = false;
         let avcBitrate = 2000;
-        let zoomMin = 1, zoomMax = 1, selectedCamera = "";
+        let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
+
+        function isSelectedCamera(btn) {
+            if (btn.dataset.camera === selectedCamera) return true;
+            if (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true') return true;
+            if (selectedCamera === btn.dataset.sensorId && btn.dataset.camera.startsWith('physical:')) return true;
+            const parts = selectedCamera.split(':');
+            return parts.length === 3 && parts[0] === 'physical' &&
+                btn.dataset.sensorId === decodeURIComponent(parts[2]);
+        }
 
         function showMessage(text, isSuccess) {
             const msg = document.getElementById('message');
@@ -347,9 +358,12 @@
                 zoomMin = data.minZoomRatio; zoomMax = data.maxZoomRatio;
                 document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
                 selectedCamera = data.camera;
+                cameraSwitchStatus = data.cameraSwitchStatus || '';
+                document.getElementById('cameraSwitchStatus').textContent = cameraSwitchStatus === 'switching' ? 'Switching camera?' : cameraSwitchStatus;
                 document.querySelectorAll('#cameraButtons button').forEach(btn => {
-                    const active = btn.dataset.camera === selectedCamera || (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true');
+                    const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
+                    btn.disabled = cameraSwitchStatus === 'switching';
                     btn.setAttribute('aria-pressed', String(active));
                 });
 
@@ -460,7 +474,7 @@
                 });
                 const data = await response.json();
                 showMessage(data.message, data.success);
-                if (data.success) setTimeout(() => { checkStatus(); checkCameraSettings(); }, 500);
+                if (data.success) { checkCameraSettings(); setTimeout(checkCameraSettings, 1000); }
             } catch (e) {
                 showMessage('Failed to switch camera: ' + e.message, false);
             }
@@ -685,11 +699,13 @@
                     btn.className = 'toggle-btn';
                     btn.textContent = item.label || item.id;
                     btn.dataset.camera = item.id;
+                    btn.dataset.sensorId = item.sensorId || '';
                     btn.dataset.facing = item.facing;
                     btn.dataset.firstFacing = String(!seenFacings.has(item.facing));
                     seenFacings.add(item.facing);
-                    const active = item.id === selectedCamera || (selectedCamera === item.facing && btn.dataset.firstFacing === 'true');
+                    const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
+                    btn.disabled = cameraSwitchStatus === 'switching';
                     btn.setAttribute('aria-pressed', String(active));
                     btn.onclick = () => {
                         switchCamera(item.id);
@@ -709,7 +725,7 @@
         // Load camera list on load
         loadCameraList();
         // Auto-refresh: status + settings every 5 seconds
-        setInterval(() => { checkStatus(); checkCameraSettings(); }, 5000);
+        setInterval(() => { checkStatus(); checkCameraSettings(); }, 2000);
         // Refresh camera list less frequently (every 15s)
         setInterval(loadCameraList, 15000);
     </script>
