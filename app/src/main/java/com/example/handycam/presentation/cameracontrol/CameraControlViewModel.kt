@@ -6,8 +6,9 @@ import androidx.camera.core.Preview
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.handycam.StreamService
+import com.example.handycam.StreamActions
 import com.example.handycam.data.model.CameraInfo
-import com.example.handycam.domain.usecase.GetAvailableCamerasUseCase
+import com.example.handycam.data.repository.CameraRepository
 import com.example.handycam.service.CameraStateHolder
 import com.example.handycam.service.StreamStateHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,7 +22,7 @@ class CameraControlViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     val streamStateHolder: StreamStateHolder,
     val cameraStateHolder: CameraStateHolder,
-    private val getAvailableCamerasUseCase: GetAvailableCamerasUseCase,
+    private val cameraRepository: CameraRepository,
 ) : ViewModel() {
 
     @Volatile
@@ -50,11 +51,8 @@ class CameraControlViewModel @Inject constructor(
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
     val availableCameras: StateFlow<List<CameraInfo>> = _availableCameras.asStateFlow()
 
-    private val _uiEvent = MutableSharedFlow<UiEvent>()
-    val uiEvent: SharedFlow<UiEvent> = _uiEvent.asSharedFlow()
-
     init {
-        viewModelScope.launch { _availableCameras.value = getAvailableCamerasUseCase() }
+        viewModelScope.launch { _availableCameras.value = cameraRepository.getAvailableCameras() }
     }
 
     fun toggleTorch() {
@@ -131,7 +129,7 @@ class CameraControlViewModel @Inject constructor(
     fun tapToFocus(normalizedX: Float, normalizedY: Float) {
         if (!streamStateHolder.useAvc.value) return
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_FOCUS_POINT"
+            action = StreamActions.SET_FOCUS_POINT
             putExtra("x", normalizedX)
             putExtra("y", normalizedY)
         })
@@ -140,7 +138,7 @@ class CameraControlViewModel @Inject constructor(
     fun switchCamera(cameraId: String) {
         streamStateHolder.setCamera(cameraId)
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_CAMERA"
+            action = StreamActions.SET_CAMERA
             putExtra("camera", cameraId)
         })
     }
@@ -154,7 +152,7 @@ class CameraControlViewModel @Inject constructor(
         }
         cameraStateHolder.previewSurfaceProvider = provider
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            action = StreamActions.SET_PREVIEW_SURFACE
             putExtra("surfaceToken", if (provider != null) "camerax_preview" else null as String?)
         })
         return token
@@ -166,7 +164,7 @@ class CameraControlViewModel @Inject constructor(
         if (!matches || !tokenMatches) return
         cameraStateHolder.previewSurfaceProvider = null
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            action = StreamActions.SET_PREVIEW_SURFACE
             putExtra("surfaceToken", null as String?)
         })
     }
@@ -175,12 +173,9 @@ class CameraControlViewModel @Inject constructor(
     fun setPreviewSurface(surface: android.view.Surface?) {
         cameraStateHolder.previewSurface = surface
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
+            action = StreamActions.SET_PREVIEW_SURFACE
             putExtra("surfaceToken", if (surface != null) "camera2_preview" else null as String?)
         })
     }
 
-    sealed class UiEvent {
-        data class Error(val message: String) : UiEvent()
-    }
 }

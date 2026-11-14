@@ -50,6 +50,11 @@ The easiest way to get going is to download and install [Android Studio](https:/
 ```
 and you should be able to run ./gradlew.bat. 
 
+Dependency versions are declared in `gradle/libs.versions.toml`. Dependabot proposes
+Gradle and GitHub Actions updates weekly. The dependency workflow builds and tests
+changes, reviews pull requests, and submits the resolved Gradle graph on pushes to
+`main` and `dev`. Dependency review requires GitHub's dependency graph to be enabled.
+
 ## License
 
 HandyCam is licensed using the GPL-3.0 license.

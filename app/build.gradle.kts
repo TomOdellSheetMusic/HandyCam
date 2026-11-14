@@ -6,8 +6,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("kotlin-kapt")
-    id("com.google.dagger.hilt.android")
-    kotlin("plugin.serialization") version "2.0.21"
+    alias(libs.plugins.hilt)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Load release signing configuration from keystore.properties (created by CI from
@@ -27,9 +27,7 @@ fun signingStoreFile(): File? {
 
 android {
     namespace = "com.example.handycam"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.handycam"
@@ -102,57 +100,48 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     
-    // ViewPager2 and Material (TabLayout) — removed, using Compose tabs
-    // implementation("androidx.viewpager2:viewpager2:1.1.0")
-    // implementation("com.google.android.material:material:1.10.0")
-    
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.constraintlayout)
     
     // CameraX for camera capture
-    implementation("androidx.camera:camera-core:1.5.1")
-    implementation("androidx.camera:camera-camera2:1.5.1")
-    implementation("androidx.camera:camera-lifecycle:1.5.1")
-    implementation("androidx.camera:camera-view:1.5.1")
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     
     // Lifecycle components
-    implementation("androidx.lifecycle:lifecycle-service:2.8.3")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.lifecycle.livedata.ktx)
+    implementation(libs.androidx.activity.ktx)
+    implementation(libs.androidx.fragment.ktx)
     
     // Hilt for dependency injection
-    implementation("com.google.dagger:hilt-android:2.51.1")
-    kapt("com.google.dagger:hilt-android-compiler:2.51.1")
+    implementation(libs.hilt.android)
+    kapt(libs.hilt.compiler)
     
     // DataStore for preferences
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation(libs.androidx.datastore.preferences)
     
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
+    implementation(libs.coroutines.android)
+    implementation(libs.coroutines.core)
     
     // Navigation Compose
-    implementation("androidx.navigation:navigation-compose:2.8.4")
+    implementation(libs.androidx.navigation.compose)
     
     // Compose Foundation (HorizontalPager, TabRow) — included via BOM
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.androidx.compose.material.icons.extended)
     
-    // Ktor Server for HTTPS
-    implementation("io.ktor:ktor-server-core:2.3.7")
-    implementation("io.ktor:ktor-server-netty:2.3.7")
-    implementation("io.ktor:ktor-server-content-negotiation:2.3.7")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
-    
-    // BouncyCastle for SSL certificate generation
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.78")
+    // HTTP control server
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
