@@ -127,6 +127,8 @@ class StreamService : LifecycleService() {
 
     private var streamStartTime: Long = -1
 
+    // DroidCam/OBS expects stream-relative microseconds for both audio and video.
+    // Keep packet timestamps independent from the MJPEG send-rate limiter.
     private fun getStreamRelativeTimeUs(): Long {
         val now = android.os.SystemClock.elapsedRealtimeNanos() / 1000L
         if (streamStartTime == -1L) {
@@ -955,6 +957,8 @@ class StreamService : LifecycleService() {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            // KEY_FRAME_RATE describes the intended rate; surface input needs an explicit cap.
+            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.coerceAtLeast(1).toFloat())
             // Shorter I-frame interval = faster recovery from dropped/corrupt frames
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
             try {
@@ -1131,7 +1135,7 @@ class StreamService : LifecycleService() {
                         } catch (_: Exception) {}
                     }
 
-                    var lastSent = 0L
+                    val frameLimiter = FrameRateLimiter(targetFps)
                     while (running && !client.isClosed && client.isConnected) {
                         val frame = try {
                             frameQueue.poll(pollTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -1147,8 +1151,7 @@ class StreamService : LifecycleService() {
                         // skipping P-frames causes the decoder to lose reference frames → macroblocking.
                         // Only throttle for MJPEG where each frame is fully independent.
                         if (!isAvcClient) {
-                            val now = getStreamRelativeTimeUs()
-                            if (now - lastSent < intervalMs * 1000L) {
+                            if (!frameLimiter.shouldSend(System.nanoTime())) {
                                 continue
                             }
                         }
@@ -1156,7 +1159,6 @@ class StreamService : LifecycleService() {
                         val pts = frame.ptsUs
                         try {
                             out.writeStreamPacket(pts, frame.data)
-                            lastSent = pts
                         } catch (se: java.net.SocketException) {
                             Log.i(TAG, "Socket closed by peer while writing: ${se.message}")
                             break

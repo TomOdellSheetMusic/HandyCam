@@ -21,4 +21,18 @@ class StreamPacketWriterTest {
         packet.get(actualPayload)
         assertArrayEquals(payload, actualPayload)
     }
+    @Test
+    fun preservesStreamRelativeMicrosecondTimestamps() {
+        val output = ByteArrayOutputStream()
+        output.writeStreamPacket(1_000_000L, byteArrayOf(7))
+        output.writeStreamPacket(1_066_667L, byteArrayOf(8))
+
+        val packet = ByteBuffer.wrap(output.toByteArray())
+        assertEquals(1_000_000L, packet.long)
+        assertEquals(1, packet.int)
+        assertEquals(7, packet.get().toInt())
+        assertEquals(1_066_667L, packet.long)
+        assertEquals(1, packet.int)
+        assertEquals(8, packet.get().toInt())
+    }
 }
