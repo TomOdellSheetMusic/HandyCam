@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +68,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -95,8 +98,11 @@ fun CameraControlScreen(
     val useAvc by viewModel.useAvc.collectAsState()
     val encoderWidth by viewModel.encoderWidth.collectAsState()
     val encoderHeight by viewModel.encoderHeight.collectAsState()
+    val sensorOrientation by viewModel.sensorOrientation.collectAsState()
+    val frontFacing by viewModel.frontFacing.collectAsState()
     val avcExposureMin by viewModel.exposureMin.collectAsState()
     val avcExposureMax by viewModel.exposureMax.collectAsState()
+    val avcExposureStep by viewModel.exposureStep.collectAsState()
 
     var showEvLabel by remember { mutableStateOf(false) }
     var focusRingVisible by remember { mutableStateOf(false) }
@@ -164,34 +170,31 @@ fun CameraControlScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (useAvc) {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
                 val density = LocalDensity.current
                 val containerWidth = constraints.maxWidth.toFloat()
                 val containerHeight = constraints.maxHeight.toFloat()
-                val videoWidth = encoderWidth.toFloat().takeIf { it > 0f }
-                val videoHeight = encoderHeight.toFloat().takeIf { it > 0f }
-
-                val (viewWidth, viewHeight) = if (videoWidth != null && videoHeight != null
-                    && containerWidth > 0f && containerHeight > 0f
-                ) {
-                    val videoAspect = videoWidth / videoHeight
-                    val containerAspect = containerWidth / containerHeight
-                    if (videoAspect > containerAspect) {
-                        val h = containerHeight
-                        val w = h * videoAspect
-                        w to h
-                    } else {
-                        val w = containerWidth
-                        val h = w / videoAspect
-                        w to h
+                val configuration = LocalConfiguration.current
+                val view = LocalView.current
+                val displayRotation = remember(configuration, view) {
+                    when (view.display?.rotation) {
+                        android.view.Surface.ROTATION_90 -> 90
+                        android.view.Surface.ROTATION_180 -> 180
+                        android.view.Surface.ROTATION_270 -> 270
+                        else -> 0
                     }
-                } else {
-                    containerWidth to containerHeight
                 }
+                val (viewWidth, viewHeight) = PreviewGeometry.fit(
+                    containerWidth, containerHeight, encoderWidth, encoderHeight,
+                    sensorOrientation, displayRotation, frontFacing
+                )
 
                 AndroidView(
                     factory = { ctx ->
                         SurfaceView(ctx).also { surfaceView ->
+                            if (encoderWidth > 0 && encoderHeight > 0) {
+                                surfaceView.holder.setFixedSize(encoderWidth, encoderHeight)
+                            }
                             surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: SurfaceHolder) {
                                     viewModel.setPreviewSurface(holder.surface)
@@ -221,12 +224,6 @@ fun CameraControlScreen(
                     update = { view ->
                         if (encoderWidth > 0 && encoderHeight > 0) {
                             view.holder.setFixedSize(encoderWidth, encoderHeight)
-                        }
-                        val layoutParams = view.layoutParams
-                        if (layoutParams != null) {
-                            layoutParams.width = viewWidth.roundToInt().coerceAtLeast(1)
-                            layoutParams.height = viewHeight.roundToInt().coerceAtLeast(1)
-                            view.layoutParams = layoutParams
                         }
                     }
                 )
@@ -467,7 +464,12 @@ fun CameraControlScreen(
                 shape = MaterialTheme.shapes.small
             ) {
                 Text(
-                    text = if (exposure >= 0) "EV +$exposure" else "EV $exposure",
+                    text = run {
+                        val step = if (useAvc) avcExposureStep else
+                            viewModel.cameraStateHolder.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
+                        if (step > 0f) "Exposure %+.1f EV".format(java.util.Locale.US, exposure * step)
+                        else "Exposure step $exposure"
+                    },
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

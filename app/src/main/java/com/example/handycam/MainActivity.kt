@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
         prefs.edit().putBoolean(RemoteStartKeys.KEY_PENDING_REMOTE_START, false).apply()
 
         val intent = Intent(this, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_START"
+            action = StreamActions.START
             putExtra("host", mainViewModel.streamStateHolder.host.value)
             putExtra("streamingPort", mainViewModel.streamStateHolder.streamingPort.value)
             putExtra("width", mainViewModel.streamStateHolder.width.value)

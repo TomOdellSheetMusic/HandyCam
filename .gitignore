@@ -3,7 +3,7 @@ droidcam.pcap
 
 # Gradle / build
 .gradle/
-
+.gradle-user/
 
 # Local configuration
 local.properties
@@ -47,3 +47,6 @@ debug.keystore
 *.class
 
 .github/copilot-instructions.md
+
+# Local wiki checkout (published via GitHub wiki)
+wiki/

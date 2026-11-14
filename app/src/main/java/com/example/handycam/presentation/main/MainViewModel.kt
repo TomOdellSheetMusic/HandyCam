@@ -6,12 +6,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.handycam.KtorHttpServerService
 import com.example.handycam.StreamService
+import com.example.handycam.StreamActions
+import com.example.handycam.HttpServerActions
 import com.example.handycam.data.model.CameraInfo
 import com.example.handycam.data.model.StreamConfig
-import com.example.handycam.data.repository.SettingsRepository
-import com.example.handycam.domain.usecase.GetAvailableCamerasUseCase
-import com.example.handycam.domain.usecase.StartStreamUseCase
-import com.example.handycam.domain.usecase.StopStreamUseCase
+import com.example.handycam.data.preferences.PreferencesManager
+import com.example.handycam.data.repository.CameraRepository
 import com.example.handycam.service.StreamStateHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,10 +25,8 @@ import javax.inject.Inject
 class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     val streamStateHolder: StreamStateHolder,
-    private val settingsRepository: SettingsRepository,
-    private val getAvailableCamerasUseCase: GetAvailableCamerasUseCase,
-    private val startStreamUseCase: StartStreamUseCase,
-    private val stopStreamUseCase: StopStreamUseCase,
+    private val preferences: PreferencesManager,
+    private val cameraRepository: CameraRepository,
 ) : ViewModel() {
 
     val isStreaming: StateFlow<Boolean> = streamStateHolder.isStreaming
@@ -37,22 +35,22 @@ class MainViewModel @Inject constructor(
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
     val availableCameras: StateFlow<List<CameraInfo>> = _availableCameras.asStateFlow()
 
-    private val _uiEvent = MutableSharedFlow<UiEvent>()
-    val uiEvent: SharedFlow<UiEvent> = _uiEvent.asSharedFlow()
-
     val localIp: String get() = getLocalIpAddress() ?: "0.0.0.0"
 
+    fun maxStreamingFps(camera: String, width: Int, height: Int, avc: Boolean): Int =
+        cameraRepository.maxStreamingFps(camera, width, height, avc)
+
     init {
-        viewModelScope.launch { _availableCameras.value = getAvailableCamerasUseCase() }
+        viewModelScope.launch { _availableCameras.value = cameraRepository.getAvailableCameras() }
         viewModelScope.launch {
-            val settings = settingsRepository.appSettings.first()
+            val settings = preferences.appSettingsFlow.first()
             streamStateHolder.setHost(settings.host)
             streamStateHolder.setStreamingPort(settings.streamingPort)
             streamStateHolder.setCamera(settings.camera)
             streamStateHolder.setUseScreenCapture(settings.useScreenCapture)
         }
         viewModelScope.launch {
-            val config = settingsRepository.streamConfig.first()
+            val config = preferences.streamConfigFlow.first()
             streamStateHolder.setWidth(config.width)
             streamStateHolder.setHeight(config.height)
             streamStateHolder.setJpegQuality(config.jpegQuality)
@@ -78,10 +76,18 @@ class MainViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val config = StreamConfig(width, height, camera, jpegQuality, fps, useAvc, avcBitrate)
-            startStreamUseCase(host, port, camera, config)
+            try {
+                preferences.updateHost(host)
+                preferences.updateStreamingPort(port)
+                preferences.updateCamera(camera)
+                preferences.updateStreamConfig(config)
+                preferences.updateStreamingState(true)
+            } catch (_: Exception) {
+                // Preserve the existing behavior: start the service even if saving fails.
+            }
 
             val intent = Intent(context, StreamService::class.java).apply {
-                action = "com.example.handycam.ACTION_START"
+                action = StreamActions.START
                 putExtra("host", host)
                 putExtra("streamingPort", port)
                 putExtra("width", width)
@@ -103,62 +109,66 @@ class MainViewModel @Inject constructor(
 
     fun stopStreaming() {
         viewModelScope.launch {
-            stopStreamUseCase()
+            try {
+                preferences.updateStreamingState(false)
+            } catch (_: Exception) {
+                // Stopping the service must not depend on saving preferences.
+            }
             context.startService(Intent(context, StreamService::class.java).apply {
-                action = "com.example.handycam.ACTION_STOP"
+                action = StreamActions.STOP
             })
         }
     }
 
     fun updateHost(host: String) {
         streamStateHolder.setHost(host)
-        viewModelScope.launch { settingsRepository.updateHost(host) }
+        viewModelScope.launch { preferences.updateHost(host) }
     }
 
     fun updateStreamingPort(port: Int) {
         streamStateHolder.setStreamingPort(port)
-        viewModelScope.launch { settingsRepository.updateStreamingPort(port) }
+        viewModelScope.launch { preferences.updateStreamingPort(port) }
     }
 
     fun updateCamera(camera: String) {
         streamStateHolder.setCamera(camera)
-        viewModelScope.launch { settingsRepository.updateCamera(camera) }
+        viewModelScope.launch { preferences.updateCamera(camera) }
     }
 
     fun updateResolution(width: Int, height: Int) {
         streamStateHolder.setWidth(width)
         streamStateHolder.setHeight(height)
-        viewModelScope.launch { settingsRepository.updateResolution(width, height) }
+        viewModelScope.launch { preferences.updateResolution(width, height) }
     }
 
     fun updateJpegQuality(quality: Int) {
         streamStateHolder.setJpegQuality(quality)
-        viewModelScope.launch { settingsRepository.updateJpegQuality(quality) }
+        viewModelScope.launch { preferences.updateJpegQuality(quality) }
     }
 
     fun updateFps(fps: Int) {
         streamStateHolder.setFps(fps)
-        viewModelScope.launch { settingsRepository.updateFps(fps) }
+        viewModelScope.launch { preferences.updateFps(fps) }
     }
 
     fun updateUseAvc(useAvc: Boolean) {
         streamStateHolder.setUseAvc(useAvc)
-        viewModelScope.launch { settingsRepository.updateUseAvc(useAvc) }
+        viewModelScope.launch { preferences.updateUseAvc(useAvc) }
     }
 
     fun updateAvcBitrate(bitrate: Int?) {
         streamStateHolder.setAvcBitrate(bitrate ?: -1)
-        viewModelScope.launch { settingsRepository.updateAvcBitrate(bitrate) }
+        viewModelScope.launch { preferences.updateAvcBitrate(bitrate) }
     }
 
     fun updateUseScreenCapture(useScreenCapture: Boolean) {
         streamStateHolder.setUseScreenCapture(useScreenCapture)
-        viewModelScope.launch { settingsRepository.updateUseScreenCapture(useScreenCapture) }
+        viewModelScope.launch { preferences.updateUseScreenCapture(useScreenCapture) }
     }
 
     fun startHttpsServer(port: Int) {
         val intent = Intent(context, KtorHttpServerService::class.java).apply {
-            action = "com.example.handycam.ACTION_START_HTTPS_SERVER"
+            action = HttpServerActions.START
             putExtra("httpPort", port)
         }
         context.startForegroundService(intent)
@@ -166,13 +176,13 @@ class MainViewModel @Inject constructor(
 
     fun stopHttpsServer() {
         context.startService(Intent(context, KtorHttpServerService::class.java).apply {
-            action = "com.example.handycam.ACTION_STOP_HTTPS_SERVER"
+            action = HttpServerActions.STOP
         })
     }
 
     fun switchCamera(camera: String) {
         context.startService(Intent(context, StreamService::class.java).apply {
-            action = "com.example.handycam.ACTION_SET_CAMERA"
+            action = StreamActions.SET_CAMERA
             putExtra("camera", camera)
         })
     }
@@ -194,7 +204,4 @@ class MainViewModel @Inject constructor(
         } catch (_: Exception) { null }
     }
 
-    sealed class UiEvent {
-        data class Error(val message: String) : UiEvent()
-    }
 }

@@ -15,6 +15,10 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 
 Note: It's not possible to start the camera stream from the api if the app is not in the foreground <br>
 
+## Network privacy
+
+Use HandyCam only on a trusted network. While streaming, any device that can reach the streaming port can access the video and audio without authentication or encryption. The optional web control server also uses unauthenticated HTTP. Anyone who can reach it can control the camera. USB connections do not disable the Wi-Fi listener. Stop streaming and the web control server when they are not needed.
+
 ## Installation
 Install the Droidcam OBS Plugin from [here](https://github.com/dev47apps/droidcam-obs-plugin/releases) or [here](https://droidcam.app/obs/#top) and connect via the Wifi IP of your smartphone or via USB by turning on Android USB Debugging. 
 
@@ -72,6 +76,11 @@ The easiest way to get going is to download and install [Android Studio](https:/
 )       
 ```
 and you should be able to run ./gradlew.bat. 
+
+Dependency versions are declared in `gradle/libs.versions.toml`. Dependabot proposes
+Gradle and GitHub Actions updates weekly. The dependency workflow builds and tests
+changes, reviews pull requests, and submits the resolved Gradle graph on pushes to
+`main` and `dev`. Dependency review requires GitHub's dependency graph to be enabled.
 
 ## License
 

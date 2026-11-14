@@ -1,0 +1,141 @@
+name: Nightly
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: android-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build signed nightly APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Stamp nightly version
+        shell: pwsh
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          $tag = git tag --list 'v[0-9]*' --sort=-version:refname | Select-Object -First 1
+          if (-not $tag) { throw 'No version tag found for the nightly build' }
+          ./scripts/stamp-android-version.ps1 nightly -BaseVersion $tag -CommitSha $env:COMMIT_SHA
+
+      - name: Setup Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::All Android signing secrets must be configured before publishing a nightly."
+            exit 1
+          fi
+          base64 -d <<< "$ANDROID_KEYSTORE_BASE64" > "$RUNNER_TEMP/keystore.jks"
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/keystore.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Ensure nightly release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          if gh release view nightly >/dev/null 2>&1; then
+            echo "Reusing the existing nightly release."
+          else
+            gh release create nightly \
+              --prerelease \
+              --target "$GIT_SHA" \
+              --title "Nightly (dev)" \
+              --notes "Rolling nightly build from dev — $GIT_SHA"
+          fi
+
+      - name: Normalize artifact name
+        env:
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+        run: |
+          OUT='app/build/outputs/apk/release'
+          APK=$(find "$OUT" -name '*.apk' -type f | head -1)
+          [ -n "$APK" ] || { echo 'APK not found' >&2; exit 1; }
+          mv "$APK" "$OUT/HandyCam-${VERSION_NAME}-universal.apk"
+
+      - name: Attest nightly APK
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: app/build/outputs/apk/release/*.apk
+
+      - name: Attach APK to nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT='app/build/outputs/apk/release'
+          for f in "$OUT"/*.apk; do
+            [ -e "$f" ] || continue
+            echo "Uploading $f"
+            gh release upload nightly "$f" --clobber
+          done
+
+      - name: Generate and attach Obtainium config
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+        run: |
+          node scripts/obtainium-generate.js "$VERSION_NAME" "nightly" obtainium.json
+          gh release upload nightly obtainium.json --clobber
+
+      - name: Remove superseded nightly APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+        run: |
+          set -euo pipefail
+          current="HandyCam-${VERSION_NAME}-universal.apk"
+          gh release view nightly --json assets > nightly-assets.json
+          jq -e --arg current "$current" 'any(.assets[]; .name == $current)' nightly-assets.json > /dev/null
+          jq -r --arg current "$current" '.assets[] | select((.name | test("^HandyCam.*\\.apk$")) and .name != $current) | .name' nightly-assets.json > old-apks.txt
+          while IFS= read -r name; do
+            echo "Removing superseded nightly asset: $name"
+            gh release delete-asset nightly "$name" --yes
+          done < old-apks.txt
+
+      - name: Update nightly release details
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
+          GIT_SHA: ${{ github.sha }}
+        run: gh release edit nightly --title "Nightly (dev)" --notes "Nightly $VERSION_NAME from dev — $GIT_SHA"

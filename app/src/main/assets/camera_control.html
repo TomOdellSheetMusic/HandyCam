@@ -136,6 +136,9 @@
             accent-color: #1a73e8;
         }
 
+        .fps-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+        .fps-presets button { flex: 1 1 65px; width: auto; margin: 0; }
+
         .control-row .val-label {
             min-width: 36px;
             text-align: right;
@@ -211,16 +214,19 @@
 
         <div class="card" id="cameraList">
             <div class="card-title">Camera Selection</div>
+            <div id="cameraSwitchStatus" role="status"></div>
             <div class="camera-btn-row" id="cameraButtons">Loading...</div>
         </div>
 
         <div class="card">
             <div class="card-title">FPS</div>
+            <div class="fps-presets" id="fpsPresets" aria-label="Frame rate presets"></div>
             <div class="control-row">
-                <label>Frame rate</label>
-                <input type="range" id="fpsSlider" min="15" max="60" value="30" oninput="setFps(this.value)">
-                <span class="val-label"><span id="fpsValue">30</span></span>
+                <label for="fpsSlider">Frame rate</label>
+                <input type="range" id="fpsSlider" min="1" max="60" step="1" value="30" oninput="setFps(this.value)">
+                <span class="val-label"><span id="fpsValue">30</span> fps</span>
             </div>
+            <div id="fpsHint">Available: 1–60 fps. Actual frame rate may vary.</div>
             <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
         </div>
 
@@ -248,17 +254,20 @@
             <div class="card-title">Exposure</div>
             <div class="control-row">
                 <label>Compensation</label>
-                <input type="range" id="exposureSlider" min="-50" max="50" value="0" oninput="setExposure(this.value)">
-                <span class="val-label"><span id="exposureValue">0</span></span>
+                <input type="range" id="exposureSlider" min="0" max="0" value="0" oninput="setExposure(this.value)" onchange="editingSettings.delete('exposure')" disabled>
+                <span class="val-label" id="exposureValue">0 EV</span>
             </div>
+            <div id="exposureNote">Exposure compensation changes the camera's brightness target. In low light, the camera may already be at its exposure limit.</div>
+            <button class="toggle-btn" id="exposureLockBtn" onclick="toggleExposureLock()" hidden>Lock exposure</button>
         </div>
 
         <div class="card" id="zoomCard">
             <div class="card-title">Zoom</div>
+            <div>Zoom ratio is relative to the selected camera.</div>
             <div class="control-row">
                 <label>Zoom</label>
-                <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)">
-                <span class="val-label"><span id="zoomValue">0</span>%</span>
+                <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)" onchange="editingSettings.delete('zoom')">
+                <span class="val-label" id="zoomValue">1.0x</span>
             </div>
         </div>
 
@@ -266,8 +275,8 @@
             <div class="card-title">Controls</div>
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
             <div id="torchNote">Torch only works while stream is active</div>
+            <div>Stop the stream to change codec.</div>
             <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">Codec: MJPEG</button>
-            <button class="toggle-btn" id="autoExposureBtn" onclick="toggleAutoExposure()">Auto Exposure: ON</button>
         </div>
 
         <div class="card">
@@ -276,9 +285,21 @@
     </div>
 
     <script>
+        let streaming = false;
+        let editingSettings = new Set();
         let torchEnabled = false;
         let avcEnabled = false;
         let avcBitrate = 2000;
+        let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
+
+        function isSelectedCamera(btn) {
+            if (btn.dataset.camera === selectedCamera) return true;
+            if (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true') return true;
+            if (selectedCamera === btn.dataset.sensorId && btn.dataset.camera.startsWith('physical:')) return true;
+            const parts = selectedCamera.split(':');
+            return parts.length === 3 && parts[0] === 'physical' &&
+                btn.dataset.sensorId === decodeURIComponent(parts[2]);
+        }
 
         function showMessage(text, isSuccess) {
             const msg = document.getElementById('message');
@@ -294,7 +315,9 @@
 
                 const badge = document.getElementById('status');
                 const text = document.getElementById('statusText');
-                if (data.streaming === true) {
+                streaming = data.streaming === true;
+                document.getElementById('useAvcBtn').disabled = streaming;
+                if (streaming) {
                     text.textContent = 'Streaming on port ' + data.port;
                     badge.className = 'status-badge active';
                     try { document.getElementById('torchBtn').disabled = false; } catch (_) {}
@@ -306,11 +329,14 @@
                     try { document.getElementById('torchNote').style.display = 'block'; } catch (_) {}
                 }
             } catch (e) {
-                showMessage('Failed to check status: ' + e.message, false);
+                document.getElementById('statusText').textContent = 'Server disconnected ? reconnecting';
+                document.getElementById('status').className = 'status-badge inactive';
             }
         }
         async function checkCameraSettings() {
+            const zoomVersionAtRequest = zoomVersion;
             try {
+                const exposureVersionAtRequest = exposureVersion;
                 const response = await fetch('/api/camera/status');
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
@@ -335,45 +361,71 @@
                     `${data.jpegQuality}%`;
 
                 // Sliders
-                document.getElementById('fpsSlider').value = data.fps;
-                document.getElementById('fpsValue').textContent = data.fps;
+                const fpsSlider = document.getElementById('fpsSlider');
+                fpsSlider.max = data.maxFps || 60;
+                renderFpsPresets(Number(fpsSlider.max));
+                if (!editingSettings.has('fps')) fpsSlider.value = data.fps;
+                updateFpsValidation();
 
-                document.getElementById('jpegSlider').value = data.jpegQuality;
-                document.getElementById('jpegValue').textContent = data.jpegQuality;
+                if (!editingSettings.has('jpeg')) {
+                    document.getElementById('jpegSlider').value = data.jpegQuality;
+                    document.getElementById('jpegValue').textContent = data.jpegQuality;
+                }
 
-                const zoomPercent = Math.round((data.zoom || 0) * 100);
-                document.getElementById('zoomSlider').value = zoomPercent;
-                document.getElementById('zoomValue').textContent = zoomPercent;
+                zoomMin = data.minZoomRatio; zoomMax = data.maxZoomRatio;
+                if (!editingSettings.has('zoom') && !zoomRequestInFlight && pendingZoom === null && zoomVersionAtRequest === zoomVersion) {
+                    const zoomPercent = Math.round((data.zoom || 0) * 100);
+                    document.getElementById('zoomSlider').value = zoomPercent;
+                    document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                }
+                selectedCamera = data.camera;
+                cameraSwitchStatus = data.cameraSwitchStatus || '';
+                document.getElementById('cameraSwitchStatus').textContent = cameraSwitchStatus === 'switching' ? 'Switching camera?' : cameraSwitchStatus;
+                document.querySelectorAll('#cameraButtons button').forEach(btn => {
+                    const active = isSelectedCamera(btn);
+                    btn.classList.toggle('active', active);
+                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.setAttribute('aria-pressed', String(active));
+                });
 
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
-                avcBitrate = data.avcBitrate || 2000;
+                if (!editingSettings.has('avc')) {
+                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : 2000;
+                    document.getElementById('avcSlider').value = avcBitrate;
+                    document.getElementById('avcValue').textContent = avcBitrate;
+                }
+                avcGroupPlaceholder = null;
                 const jpegCard = document.getElementById('jpegCard');
                 const avcGroup = document.getElementById('avcGroup');
+                avcGroup.style.display = avcEnabled ? '' : 'none';
                 if (avcEnabled) {
                     jpegCard.style.display = 'none';
                 } else {
                     jpegCard.style.display = '';
                 }
 
-                document.getElementById('exposureSlider').value = data.exposure;
-                document.getElementById('exposureValue').textContent = data.exposure;
-
-                // auto exposure visibility
-                const autoExposureEnabledLocal = data.autoExposure === true;
-                // When auto-exposure is enabled, hide manual exposure slider
-                if (autoExposureEnabledLocal) {
-                    document.getElementById('exposureCard').style.display = 'none';
-                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: ON';
-                    document.getElementById('autoExposureBtn').classList.add('active');
-                } else {
-                    document.getElementById('exposureCard').style.display = '';
-                    document.getElementById('autoExposureBtn').textContent = 'Auto Exposure: OFF';
-                    document.getElementById('autoExposureBtn').classList.remove('active');
+                const slider = document.getElementById('exposureSlider');
+                exposureStep = data.exposureStep || 0;
+                slider.min = data.exposureMin ?? 0;
+                slider.max = data.exposureMax ?? 0;
+                const unsupported = Number(slider.min) === Number(slider.max);
+                const locked = data.useAvc && data.autoExposure === false;
+                slider.disabled = !data.streaming || unsupported || locked;
+                const exposureLockBtn = document.getElementById('exposureLockBtn');
+                exposureLockBtn.hidden = !data.useAvc || !data.streaming;
+                exposureLockBtn.textContent = locked ? 'Unlock exposure' : 'Lock exposure';
+                exposureLockBtn.disabled = exposureLockRequestInFlight;
+                autoExposureEnabled = data.autoExposure !== false;
+                document.getElementById('exposureNote').textContent = !data.streaming ?
+                    'Start camera streaming to adjust exposure.' : unsupported ?
+                    'Exposure compensation is not available for this camera.' : locked ?
+                    'Exposure is locked. Unlock it to adjust compensation.' :
+                    "Compensation changes the camera's brightness target. In low light, the camera may already be at its exposure limit.";
+                if (!editingSettings.has('exposure') && !exposureRequestInFlight && pendingExposure === null && exposureVersionAtRequest === exposureVersion) {
+                    slider.value = data.exposure;
+                    document.getElementById('exposureValue').textContent = formatExposure(data.exposure);
                 }
-
-                // remember auto flags for UI
-                window.autoExposureEnabled = autoExposureEnabledLocal;
 
                 // Toggles
                 torchEnabled = data.torchEnabled === true;
@@ -382,13 +434,12 @@
 
             } catch (e) {
                 console.error('Failed to check camera settings:', e);
-                showMessage('Failed to load camera settings', false);
+                // The status badge reports disconnection; keep the last settings visible.
             }
         }
 
         function updateToggleButtons() {
             const torchBtn = document.getElementById('torchBtn');
-            const autoExposureBtn = document.getElementById('autoExposureBtn');
             const useAvcBtn = document.getElementById('useAvcBtn');
 
             if (torchEnabled) {
@@ -452,139 +503,189 @@
                 });
                 const data = await response.json();
                 showMessage(data.message, data.success);
-                if (data.success) setTimeout(() => { checkStatus(); checkCameraSettings(); }, 500);
+                if (data.success) { checkCameraSettings(); setTimeout(checkCameraSettings, 1000); }
             } catch (e) {
                 showMessage('Failed to switch camera: ' + e.message, false);
             }
         }
 
-        async function setFps(fps) {
-            document.getElementById('fpsValue').textContent = fps;
-            try {
-                const response = await fetch('/api/settings/fps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fps: parseInt(fps) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set FPS: ' + e.message, false);
-            }
+        function updateFpsValidation() {
+            const input = document.getElementById('fpsSlider');
+            const value = Number(input.value);
+            const max = Number(input.max);
+            const valid = input.value !== '' && Number.isInteger(value) && value >= 1 && value <= max;
+            document.getElementById('fpsValue').textContent = input.value;
+            document.querySelectorAll('#fpsPresets button').forEach(button => {
+                const selected = Number(button.dataset.fps) === value;
+                button.classList.toggle('active', selected);
+                button.setAttribute('aria-pressed', String(selected));
+            });
+            document.getElementById('fpsHint').textContent = valid ?
+                `Available: 1–${max} fps. Actual frame rate may vary.` :
+                `Choose a frame rate from 1 to ${max}.`;
+            document.getElementById('applyFpsBtn').disabled = !valid;
+            return valid;
         }
 
-        async function setJpegQuality(quality) {
+        function renderFpsPresets(max) {
+            const container = document.getElementById('fpsPresets');
+            if (container.dataset.maximum === String(max)) return;
+            container.dataset.maximum = String(max);
+            container.replaceChildren();
+            [...new Set([15, 30, 60, 120, 240].filter(fps => fps <= max).concat(max))]
+                .sort((a, b) => a - b).forEach(fps => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'toggle-btn';
+                    button.dataset.fps = String(fps);
+                    button.textContent = `${fps} fps`;
+                    button.onclick = () => setFps(fps);
+                    container.appendChild(button);
+                });
+        }
+
+        function setFps(fps) {
+            editingSettings.add('fps');
+            document.getElementById('fpsSlider').value = fps;
+            updateFpsValidation();
+        }
+
+        function setJpegQuality(quality) {
+            editingSettings.add('jpeg');
             document.getElementById('jpegValue').textContent = quality;
-            try {
-                const response = await fetch('/api/settings/jpeg-quality', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ quality: parseInt(quality) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set JPEG quality: ' + e.message, false);
-            }
         }
 
-        async function applyFps() {
-            const btn = document.getElementById('applyFpsBtn');
-            btn.disabled = true;
-            const fps = parseInt(document.getElementById('fpsSlider').value);
+        async function applySetting(endpoint, body, key, button) {
+            button.disabled = true;
             try {
-                // ensure setting saved
-                await fetch('/api/settings/fps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fps })
+                const response = await fetch(endpoint, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
                 });
-            } catch (e) {
-                showMessage('Failed to save FPS: ' + e.message, false);
-                btn.disabled = false; return;
-            }
-
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) {
-                    showMessage('Failed to stop stream: ' + data.message, false);
-                    btn.disabled = false; return;
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.message);
+                editingSettings.delete(key);
+                if (streaming) {
+                    const restart = await fetch('/api/camera/start', { method: 'POST' });
+                    const result = await restart.json();
+                    if (!restart.ok || !result.success) throw new Error(result.message);
+                    showMessage(data.message + '; stream restart requested', true);
+                } else {
+                    showMessage(data.message, true);
                 }
-
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
+                await checkCameraSettings();
             } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
+                showMessage('Failed to apply setting: ' + e.message, false);
             } finally {
-                btn.disabled = false;
+                button.disabled = false;
+                if (key === 'fps') updateFpsValidation();
             }
         }
 
-        async function applyJpeg() {
-            const btn = document.getElementById('applyJpegBtn');
-            btn.disabled = true;
-            const quality = parseInt(document.getElementById('jpegSlider').value);
+        function applyFps() {
+            if (!updateFpsValidation()) return;
+            return applySetting('/api/settings/fps', { fps: Number(document.getElementById('fpsSlider').value) }, 'fps', document.getElementById('applyFpsBtn'));
+        }
+
+        function applyJpeg() {
+            return applySetting('/api/settings/jpeg-quality', { quality: Number(document.getElementById('jpegSlider').value) }, 'jpeg', document.getElementById('applyJpegBtn'));
+        }
+
+        let exposureStep = 0;
+        let autoExposureEnabled = true;
+        let exposureLockRequestInFlight = false;
+        let exposureRequestInFlight = false;
+        let pendingExposure = null;
+        let exposureVersion = 0;
+
+        async function toggleExposureLock() {
+            if (exposureLockRequestInFlight) return;
+            exposureLockRequestInFlight = true;
+            const button = document.getElementById('exposureLockBtn');
+            button.disabled = true;
             try {
-                await fetch('/api/settings/jpeg-quality', {
+                const response = await fetch('/api/settings/auto-exposure', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ quality })
+                    body: JSON.stringify({ enabled: !autoExposureEnabled })
                 });
+                const data = await response.json();
+                if (!response.ok || !data.success) showMessage(data.message || 'Failed to change exposure lock', false);
             } catch (e) {
-                showMessage('Failed to save JPEG quality: ' + e.message, false);
-                btn.disabled = false; return;
+                showMessage('Failed to change exposure lock: ' + e.message, false);
+            } finally {
+                exposureLockRequestInFlight = false;
+                button.disabled = false;
+                checkCameraSettings();
             }
+        }
 
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) {
-                    showMessage('Failed to stop stream: ' + data.message, false);
-                    btn.disabled = false; return;
+        function formatExposure(index) {
+            if (!(exposureStep > 0)) return `Step ${index}`;
+            const ev = Number(index) * exposureStep;
+            return `${ev > 0 ? '+' : ''}${ev.toFixed(2)} EV`;
+        }
+
+        function setExposure(exposure) {
+            editingSettings.add('exposure');
+            exposureVersion++;
+            pendingExposure = Number(exposure);
+            document.getElementById('exposureValue').textContent = formatExposure(pendingExposure);
+            if (!exposureRequestInFlight) sendPendingExposure();
+        }
+
+        async function sendPendingExposure() {
+            exposureRequestInFlight = true;
+            while (pendingExposure !== null) {
+                const value = pendingExposure;
+                pendingExposure = null;
+                try {
+                    const response = await fetch('/api/settings/exposure', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ exposure: value })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || !data.success) showMessage(data.message || 'Failed to set exposure', false);
+                } catch (e) {
+                    showMessage('Failed to set exposure: ' + e.message, false);
                 }
-
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
-            } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
-            } finally {
-                btn.disabled = false;
             }
+            exposureRequestInFlight = false;
         }
 
-        async function setExposure(exposure) {
-            document.getElementById('exposureValue').textContent = exposure;
-            try {
-                const response = await fetch('/api/settings/exposure', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ exposure: parseInt(exposure) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set exposure: ' + e.message, false);
-            }
+        let zoomRequestInFlight = false;
+        let pendingZoom = null;
+        let zoomVersion = 0;
+
+        function setZoom(zoomPercent) {
+            editingSettings.add('zoom');
+            const fraction = Number(zoomPercent) / 100;
+            const ratio = avcEnabled ? zoomMin + fraction * (zoomMax - zoomMin) : 1 / ((1 - fraction) / zoomMin + fraction / zoomMax);
+            document.getElementById('zoomValue').textContent = ratio.toFixed(1) + 'x';
+            zoomVersion++;
+            pendingZoom = Number(zoomPercent);
+            if (!zoomRequestInFlight) sendPendingZoom();
         }
 
-        async function setZoom(zoomPercent) {
-            document.getElementById('zoomValue').textContent = zoomPercent;
-            try {
-                const response = await fetch('/api/settings/zoom', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ zoomPercent: parseFloat(zoomPercent) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set zoom: ' + e.message, false);
+        async function sendPendingZoom() {
+            zoomRequestInFlight = true;
+            while (pendingZoom !== null) {
+                const value = pendingZoom;
+                pendingZoom = null;
+                try {
+                    const response = await fetch('/api/settings/zoom', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ zoomPercent: value })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || !data.success) showMessage(data.message || 'Failed to set zoom', false);
+                } catch (e) {
+                    showMessage('Failed to set zoom: ' + e.message, false);
+                }
             }
+            zoomRequestInFlight = false;
         }
 
         async function toggleTorch() {
@@ -623,44 +724,22 @@
                     avcEnabled = !avcEnabled; updateAvcButton(); showMessage(data.message, false); return;
                 }
                 updateAvcButton();
+                showMessage(data.message, true);
+                await checkCameraSettings();
             } catch (e) {
                 avcEnabled = !avcEnabled; updateAvcButton(); showMessage('Failed to set AVC mode: ' + e.message, false);
             }
         }
 
         function setAvcBitrate(b) {
+            editingSettings.add('avc');
             avcBitrate = parseInt(b);
             document.getElementById('avcValue').textContent = avcBitrate;
         }
 
-        async function applyAvc() {
-            const btn = document.getElementById('applyAvcBtn');
-            btn.disabled = true;
-            try {
-                await fetch('/api/settings/avc-bitrate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bitrate: avcBitrate })
-                });
-            } catch (e) {
-                showMessage('Failed to save AVC bitrate: ' + e.message, false);
-                btn.disabled = false; return;
-            }
-
-            try {
-                let resp = await fetch('/api/camera/stop', { method: 'POST' });
-                let data = await resp.json();
-                if (!data.success) { showMessage('Failed to stop stream: ' + data.message, false); btn.disabled = false; return; }
-                resp = await fetch('/api/camera/start', { method: 'POST' });
-                data = await resp.json();
-                showMessage(data.message, data.success);
-                if (data.success) setTimeout(checkStatus, 1000);
-            } catch (e) {
-                showMessage('Failed to restart stream: ' + e.message, false);
-            } finally { btn.disabled = false; }
+        function applyAvc() {
+            return applySetting('/api/settings/avc-bitrate', { bitrate: avcBitrate }, 'avc', document.getElementById('applyAvcBtn'));
         }
-
-    
 
         async function loadCameraList() {
             try {
@@ -669,10 +748,20 @@
                 const list = await response.json();
                 const container = document.getElementById('cameraButtons');
                 container.innerHTML = '';
+                const seenFacings = new Set();
                 list.forEach(item => {
                     const btn = document.createElement('button');
                     btn.className = 'toggle-btn';
                     btn.textContent = item.label || item.id;
+                    btn.dataset.camera = item.id;
+                    btn.dataset.sensorId = item.sensorId || '';
+                    btn.dataset.facing = item.facing;
+                    btn.dataset.firstFacing = String(!seenFacings.has(item.facing));
+                    seenFacings.add(item.facing);
+                    const active = isSelectedCamera(btn);
+                    btn.classList.toggle('active', active);
+                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.setAttribute('aria-pressed', String(active));
                     btn.onclick = () => {
                         switchCamera(item.id);
                     };
@@ -681,17 +770,19 @@
             } catch (e) {
                 console.error('Failed to load camera list', e);
                 const container = document.getElementById('cameraButtons');
-                container.textContent = 'Failed to load cameras';
+                if (!container.children.length) container.textContent = 'Waiting for server';
             }
         }
 
         // Check status and camera settings on load
+        renderFpsPresets(60);
+        updateFpsValidation();
         checkStatus();
         checkCameraSettings();
         // Load camera list on load
         loadCameraList();
         // Auto-refresh: status + settings every 5 seconds
-        setInterval(() => { checkStatus(); checkCameraSettings(); }, 5000);
+        setInterval(() => { checkStatus(); checkCameraSettings(); }, 2000);
         // Refresh camera list less frequently (every 15s)
         setInterval(loadCameraList, 15000);
     </script>
