@@ -1608,17 +1608,7 @@ class StreamService : LifecycleService() {
                             return@filter true
                         }
                         
-                        // Fallback: Match if we have similar focal lengths (with small tolerance for floating point)
-                        val chars2 = mgr.getCameraCharacteristics(cameraId2)
-                        val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            ?.take(1)
-                            ?.toList() ?: emptyList()
-                        
-                        focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
-                            focal2.any { f2 ->
-                                kotlin.math.abs(f2 - targetFocal) < 0.1f
-                            }
-                        }
+                        false
                     } catch (e: Exception) {
                         Log.w(TAG, "Error matching camera in filter", e)
                         false

@@ -48,6 +48,8 @@ class KtorHttpServerService : LifecycleService() {
     private var isRunning = false
     @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
     
+    @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
+
     private var startTime: Long = 0
 
     override fun onCreate() {
@@ -201,6 +203,22 @@ class KtorHttpServerService : LifecycleService() {
             
             // Add custom routes here as needed
             get("/api/camera/status") {
+                val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val selection = streamStateHolder.camera.value
+                val id = try {
+                    cm.cameraIdList.firstOrNull { id ->
+                        id == selection || (selection == "back" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) ||
+                            (selection == "front" && cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT)
+                    }
+                } catch (_: Exception) { null }
+                val chars = try { id?.let { cm.getCameraCharacteristics(it) } } catch (_: Exception) { null }
+                val range = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
+                val cameraZoom = if (!streamStateHolder.useAvc.value) cameraStateHolder.cameraInfo?.zoomState?.value else null
+                val minZoom = cameraZoom?.minZoomRatio ?: range?.lower ?: 1f
+                val maxZoom = cameraZoom?.maxZoomRatio ?: range?.upper ?: chars?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+                val linear = streamStateHolder.zoom.value
+                val ratio = cameraZoom?.zoomRatio ?: if (streamStateHolder.useAvc.value) minZoom + linear * (maxZoom - minZoom)
+                    else 1f / ((1f - linear) / minZoom + linear / maxZoom)
                 val status = CameraStatusResponse(
                     streaming = (streamStateHolder.isStreaming.value),
                     port = (streamStateHolder.streamingPort.value),
@@ -211,6 +229,9 @@ class KtorHttpServerService : LifecycleService() {
                     jpegQuality = (streamStateHolder.jpegQuality.value),
                     useAvc = (streamStateHolder.useAvc.value),
                     zoom = (streamStateHolder.zoom.value),
+                    zoomRatio = ratio,
+                    minZoomRatio = minZoom,
+                    maxZoomRatio = maxZoom,
                     zoomLocked = (streamStateHolder.zoomLocked.value),
                     torchEnabled = (streamStateHolder.torchEnabled.value),
                     autoFocus = (streamStateHolder.autoFocus.value),
@@ -222,9 +243,7 @@ class KtorHttpServerService : LifecycleService() {
 
             get("/api/camera/list") {
                 val list = mutableListOf<CameraListItem>()
-                // logical picks
-                list.add(CameraListItem("back", "back", "back", ""))
-                list.add(CameraListItem("front", "front", "front", ""))
+                // CameraManager exposes camera IDs that can be opened independently.
 
                 try {
                     val cm = this@KtorHttpServerService.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -238,7 +257,15 @@ class KtorHttpServerService : LifecycleService() {
                             }
                             val focalArr = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                             val focalDesc = if (focalArr != null && focalArr.isNotEmpty()) String.format("f=%.1fmm", focalArr[0]) else ""
-                            val label = if (focalDesc.isNotEmpty()) "$id ($facing, $focalDesc)" else "$id ($facing)"
+                            val focal = focalArr?.firstOrNull()
+                            val name = when {
+                                facing == "front" -> "Front"
+                                facing == "back" && focal != null && focal < 3f -> "Ultra-wide"
+                                facing == "back" && focal != null && focal > 10f -> "Telephoto"
+                                facing == "back" -> "Wide"
+                                else -> "Camera"
+                            }
+                            val label = listOf(name, focalDesc, "ID $id").filter { it.isNotEmpty() }.joinToString(" ? ")
                             list.add(CameraListItem(id, label, facing, focalDesc))
                         } catch (_: Exception) { }
                     }
@@ -342,14 +369,20 @@ class KtorHttpServerService : LifecycleService() {
             post("/api/camera/switch") {
                 try {
                     val params = call.receive<Map<String, String>>()
-                    val camera = params["camera"] ?: "back"
+                    val camera = params["camera"] ?: throw IllegalArgumentException("Missing camera")
+                    val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    if (camera !in manager.cameraIdList && camera != "back" && camera != "front") {
+                        call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Camera is not available"))
+                        return@post
+                    }
                     val intent = Intent(this@KtorHttpServerService, StreamService::class.java).apply {
                         action = StreamActions.SET_CAMERA
                         putExtra("camera", camera)
                     }
-                    startService(intent)
+                    if (streamStateHolder.isStreaming.value) startService(intent)
                     streamStateHolder.setCamera(camera)
-                    call.respond(ApiResponse(true, "Switched to $camera camera"))
+                    if (!streamStateHolder.isStreaming.value) streamStateHolder.setZoom(0f)
+                    call.respond(ApiResponse(true, "Camera selection updated"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ApiResponse(false, "Failed to switch camera: ${e.message}"))
                 }

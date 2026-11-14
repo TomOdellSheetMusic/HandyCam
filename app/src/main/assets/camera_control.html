@@ -258,7 +258,7 @@
             <div class="control-row">
                 <label>Zoom</label>
                 <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)">
-                <span class="val-label"><span id="zoomValue">0</span>%</span>
+                <span class="val-label" id="zoomValue">1.0x</span>
             </div>
         </div>
 
@@ -279,6 +279,7 @@
         let torchEnabled = false;
         let avcEnabled = false;
         let avcBitrate = 2000;
+        let zoomMin = 1, zoomMax = 1, selectedCamera = "";
 
         function showMessage(text, isSuccess) {
             const msg = document.getElementById('message');
@@ -343,7 +344,14 @@
 
                 const zoomPercent = Math.round((data.zoom || 0) * 100);
                 document.getElementById('zoomSlider').value = zoomPercent;
-                document.getElementById('zoomValue').textContent = zoomPercent;
+                zoomMin = data.minZoomRatio; zoomMax = data.maxZoomRatio;
+                document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                selectedCamera = data.camera;
+                document.querySelectorAll('#cameraButtons button').forEach(btn => {
+                    const active = btn.dataset.camera === selectedCamera || (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true');
+                    btn.classList.toggle('active', active);
+                    btn.setAttribute('aria-pressed', String(active));
+                });
 
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
@@ -573,7 +581,9 @@
         }
 
         async function setZoom(zoomPercent) {
-            document.getElementById('zoomValue').textContent = zoomPercent;
+            const fraction = Number(zoomPercent) / 100;
+            const ratio = avcEnabled ? zoomMin + fraction * (zoomMax - zoomMin) : 1 / ((1 - fraction) / zoomMin + fraction / zoomMax);
+            document.getElementById('zoomValue').textContent = ratio.toFixed(1) + 'x';
             try {
                 const response = await fetch('/api/settings/zoom', {
                     method: 'POST',
@@ -669,10 +679,18 @@
                 const list = await response.json();
                 const container = document.getElementById('cameraButtons');
                 container.innerHTML = '';
+                const seenFacings = new Set();
                 list.forEach(item => {
                     const btn = document.createElement('button');
                     btn.className = 'toggle-btn';
                     btn.textContent = item.label || item.id;
+                    btn.dataset.camera = item.id;
+                    btn.dataset.facing = item.facing;
+                    btn.dataset.firstFacing = String(!seenFacings.has(item.facing));
+                    seenFacings.add(item.facing);
+                    const active = item.id === selectedCamera || (selectedCamera === item.facing && btn.dataset.firstFacing === 'true');
+                    btn.classList.toggle('active', active);
+                    btn.setAttribute('aria-pressed', String(active));
                     btn.onclick = () => {
                         switchCamera(item.id);
                     };
