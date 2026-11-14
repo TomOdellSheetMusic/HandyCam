@@ -259,7 +259,7 @@
             <div>Zoom ratio is relative to the selected camera.</div>
             <div class="control-row">
                 <label>Zoom</label>
-                <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)">
+                <input type="range" id="zoomSlider" min="0" max="100" value="0" oninput="setZoom(this.value)" onchange="editingSettings.delete('zoom')">
                 <span class="val-label" id="zoomValue">1.0x</span>
             </div>
         </div>
@@ -328,6 +328,7 @@
             }
         }
         async function checkCameraSettings() {
+            const zoomVersionAtRequest = zoomVersion;
             try {
                 const response = await fetch('/api/camera/status');
                 if (!response.ok) {
@@ -363,10 +364,12 @@
                     document.getElementById('jpegValue').textContent = data.jpegQuality;
                 }
 
-                const zoomPercent = Math.round((data.zoom || 0) * 100);
-                document.getElementById('zoomSlider').value = zoomPercent;
                 zoomMin = data.minZoomRatio; zoomMax = data.maxZoomRatio;
-                document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                if (!editingSettings.has('zoom') && !zoomRequestInFlight && pendingZoom === null && zoomVersionAtRequest === zoomVersion) {
+                    const zoomPercent = Math.round((data.zoom || 0) * 100);
+                    document.getElementById('zoomSlider').value = zoomPercent;
+                    document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                }
                 selectedCamera = data.camera;
                 cameraSwitchStatus = data.cameraSwitchStatus || '';
                 document.getElementById('cameraSwitchStatus').textContent = cameraSwitchStatus === 'switching' ? 'Switching camera?' : cameraSwitchStatus;
@@ -553,21 +556,38 @@
             }
         }
 
-        async function setZoom(zoomPercent) {
+        let zoomRequestInFlight = false;
+        let pendingZoom = null;
+        let zoomVersion = 0;
+
+        function setZoom(zoomPercent) {
+            editingSettings.add('zoom');
             const fraction = Number(zoomPercent) / 100;
             const ratio = avcEnabled ? zoomMin + fraction * (zoomMax - zoomMin) : 1 / ((1 - fraction) / zoomMin + fraction / zoomMax);
             document.getElementById('zoomValue').textContent = ratio.toFixed(1) + 'x';
-            try {
-                const response = await fetch('/api/settings/zoom', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ zoomPercent: parseFloat(zoomPercent) })
-                });
-                const data = await response.json();
-                if (!data.success) showMessage(data.message, false);
-            } catch (e) {
-                showMessage('Failed to set zoom: ' + e.message, false);
+            zoomVersion++;
+            pendingZoom = Number(zoomPercent);
+            if (!zoomRequestInFlight) sendPendingZoom();
+        }
+
+        async function sendPendingZoom() {
+            zoomRequestInFlight = true;
+            while (pendingZoom !== null) {
+                const value = pendingZoom;
+                pendingZoom = null;
+                try {
+                    const response = await fetch('/api/settings/zoom', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ zoomPercent: value })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || !data.success) showMessage(data.message || 'Failed to set zoom', false);
+                } catch (e) {
+                    showMessage('Failed to set zoom: ' + e.message, false);
+                }
             }
+            zoomRequestInFlight = false;
         }
 
         async function toggleTorch() {
