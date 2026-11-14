@@ -24,6 +24,15 @@ class StreamStateHolder @Inject constructor() {
     private val _camera = MutableStateFlow("back")
     val camera: StateFlow<String> = _camera.asStateFlow()
 
+    private val _cameraSwitchStatus = MutableStateFlow("")
+    val cameraSwitchStatus: StateFlow<String> = _cameraSwitchStatus.asStateFlow()
+    private val _requestedCamera = MutableStateFlow("")
+    val requestedCamera: StateFlow<String> = _requestedCamera.asStateFlow()
+    fun setCameraSwitchStatus(status: String, requested: String = "") {
+        _requestedCamera.value = requested
+        _cameraSwitchStatus.value = status
+    }
+
     private val _streamingPort = MutableStateFlow(4747)
     val streamingPort: StateFlow<Int> = _streamingPort.asStateFlow()
 

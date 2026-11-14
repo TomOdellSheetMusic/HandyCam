@@ -75,6 +75,7 @@ class StreamService : LifecycleService() {
 
     // runtime options filled from Intent extras
     private var selectedCamera: String = "back"
+    private var cameraBeforeSwitch: String? = null
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
     private var useAvc: Boolean = false
@@ -279,8 +280,7 @@ class StreamService : LifecycleService() {
                 val newCam = intent.getStringExtra("camera") ?: ""
                 if (newCam.isNotBlank()) {
                     Log.i(TAG, "Received camera switch request -> $newCam")
-                    streamStateHolder.setCamera(newCam)
-                    // perform camera switch while streaming
+                    // The public selection changes only when the new camera is ready.
                     try {
                         handleCameraSwitchRequest(newCam)
                     } catch (e: Exception) {
@@ -294,6 +294,8 @@ class StreamService : LifecycleService() {
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
             StreamActions.STOP -> {
+                cameraBeforeSwitch = null
+                streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreaming(false)
                 unregisterMdns()
                 stopStreaming()
@@ -403,7 +405,7 @@ class StreamService : LifecycleService() {
             // Zoom
             val zoom = streamStateHolder.zoom.value
             try {
-                val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
+                val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: cameraDevice!!.id)
                 val zoomRange = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                     chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 } else {
@@ -701,8 +703,8 @@ class StreamService : LifecycleService() {
 
                 val selector = if (physicalCameraId != null) {
                     // Use custom selector for specific physical camera (includes focal length variants)
-                    buildCameraSelectorForId(physicalCameraId) ?:
-                    (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                    buildCameraSelectorForId(physicalCameraId, PhysicalLens.parse(selectedCamera)?.second)
+                        ?: throw IllegalStateException("Camera selector unavailable")
                 } else {
                     // Fallback to front/back if no physical ID found
                     if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
@@ -1364,7 +1366,7 @@ class StreamService : LifecycleService() {
         var chosenWidth = reqWidth
         var chosenHeight = reqHeight
         try {
-            val chars = cameraManager?.getCameraCharacteristics(camId)
+            val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
             val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
                 cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper)
@@ -1499,46 +1501,58 @@ class StreamService : LifecycleService() {
 
                                     session.setRepeatingRequest(request, null, cameraHandler)
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
+                                    if (cameraBeforeSwitch != null) {
+                                        streamStateHolder.setCamera(selectedCamera)
+                                        cameraBeforeSwitch = null
+                                        streamStateHolder.setCameraSwitchStatus("")
+                                    }
                                     
                                     // Notify that camera is ready
                                         sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to start repeating request", e)
+                                    failCamera2Switch("Failed to start selected camera")
                                 }
                             }
 
                             override fun onConfigureFailed(session: CameraCaptureSession) {
                                 Log.e(TAG, "Camera2 session configuration failed")
+                                failCamera2Switch("Selected lens does not support this stream configuration")
                             }
                         }
                         val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
                             android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                            targets.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                            targets.map { physicalOutput(it) },
                             java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                             sessionCb
                         )
                         camera.createCaptureSession(sessionConfig)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to create capture request/session", e)
+                        failCamera2Switch("Failed to configure selected lens")
                     }
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
                     Log.i(TAG, "Camera disconnected")
+                    failCamera2Switch("Camera disconnected")
                     try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     Log.e(TAG, "Camera error: $error")
+                    failCamera2Switch("Could not open selected camera ($error)")
                     try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                 }
             }, cameraHandler)
         } catch (e: SecurityException) {
             Log.e(TAG, "Camera permission missing", e)
+            failCamera2Switch("Camera permission missing")
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Camera access error", e)
+            failCamera2Switch("Camera access error")
         }
     }
 
@@ -1560,6 +1574,7 @@ class StreamService : LifecycleService() {
     }
 
     private fun findCameraId(sel: String): String? {
+        PhysicalLens.parse(sel)?.let { return it.first }
         val mgr = cameraManager ?: return null
         try {
             for (id in mgr.cameraIdList) {
@@ -1577,7 +1592,7 @@ class StreamService : LifecycleService() {
         return null
     }
 
-    private fun buildCameraSelectorForId(cameraId: String): CameraSelector? {
+    private fun buildCameraSelectorForId(cameraId: String, physicalId: String? = null): CameraSelector? {
         // For CameraX 1.1+, we can use addCameraFilter to select specific physical cameras
         // by checking against Camera2 characteristics
         return try {
@@ -1591,6 +1606,7 @@ class StreamService : LifecycleService() {
             Log.i(TAG, "Building selector for camera $cameraId with facing=$targetFacing, focal lengths=$targetFocalLengths")
             
             val selectorBuilder = CameraSelector.Builder()
+            if (physicalId != null) selectorBuilder.setPhysicalCameraId(physicalId)
             
             // First, require the correct facing direction
             when (targetFacing) {
@@ -1618,24 +1634,8 @@ class StreamService : LifecycleService() {
             
             selectorBuilder.build()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to build custom CameraSelector for camera $cameraId, will use facing direction", e)
-            // Fallback to just using facing direction
-            try {
-                val mgr = cameraManager ?: return null
-                val chars = mgr.getCameraCharacteristics(cameraId)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
-                
-                val selectorBuilder = CameraSelector.Builder()
-                when (facing) {
-                    CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
-                    CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                    else -> {} // Unknown
-                }
-                selectorBuilder.build()
-            } catch (e2: Exception) {
-                Log.w(TAG, "Failed all attempts to build CameraSelector for $cameraId", e2)
-                null
-            }
+            Log.w(TAG, "Failed to build selector for camera $cameraId", e)
+            null
         }
     }
 
@@ -1643,8 +1643,10 @@ class StreamService : LifecycleService() {
         // update stored selection
         if (newCam == selectedCamera) {
             Log.i(TAG, "Camera already set to $newCam")
+            streamStateHolder.setCameraSwitchStatus("")
             return
         }
+        cameraBeforeSwitch = selectedCamera
         selectedCamera = newCam
         streamStateHolder.setZoom(0f)
 
@@ -1657,6 +1659,7 @@ class StreamService : LifecycleService() {
                 cameraHandler?.post { updateCamera2Request() }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to switch Camera2 camera", e)
+                failCamera2Switch("Failed to switch camera")
             }
         } else {
             // For CameraX MJPEG path, rebind the analysis use case to the new selector
@@ -1664,6 +1667,9 @@ class StreamService : LifecycleService() {
                 try {
                     val provider = cameraProvider ?: run {
                         Log.w(TAG, "CameraProvider not available when switching camera")
+                        selectedCamera = cameraBeforeSwitch ?: selectedCamera
+                        cameraBeforeSwitch = null
+                        streamStateHolder.setCameraSwitchStatus("Camera is not ready")
                         return@launch
                     }
                     provider.unbindAll()
@@ -1673,8 +1679,8 @@ class StreamService : LifecycleService() {
                     
                     val selector = if (physicalCameraId != null) {
                         // Use custom selector for specific physical camera (includes focal length variants)
-                        buildCameraSelectorForId(physicalCameraId) ?: 
-                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                        buildCameraSelectorForId(physicalCameraId, PhysicalLens.parse(selectedCamera)?.second)
+                            ?: throw IllegalStateException("Camera selector unavailable")
                     } else {
                         // Fallback to front/back if no physical ID found
                         if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
@@ -1684,15 +1690,26 @@ class StreamService : LifecycleService() {
                     analysisUseCase?.let { useCases.add(it) }
                     previewUseCase?.let { useCases.add(it) }
                     
+                    if (useCases.isEmpty()) throw IllegalStateException("Camera use cases are not ready")
                     if (useCases.isNotEmpty()) {
                         val camera = provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
                         cameraStateHolder.cameraControl = camera.cameraControl
                         cameraStateHolder.cameraInfo = camera.cameraInfo
                         try { cameraStateHolder.cameraControl?.setLinearZoom(0f) } catch (_: Exception) {}
+                        streamStateHolder.setCamera(selectedCamera)
+                        cameraBeforeSwitch = null
+                        streamStateHolder.setCameraSwitchStatus("")
                         Log.i(TAG, "Switched CameraX binding to $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to rebind CameraX for new camera", e)
+                    val previous = cameraBeforeSwitch
+                    cameraBeforeSwitch = null
+                    if (previous != null) {
+                        selectedCamera = previous
+                        rebindCameraXUseCases()
+                    }
+                    streamStateHolder.setCameraSwitchStatus("Failed to select camera: ${e.message ?: "unsupported configuration"}")
                 }
             }
         }
@@ -1765,6 +1782,26 @@ class StreamService : LifecycleService() {
         }
     }
     
+    private fun physicalOutput(surface: Surface): android.hardware.camera2.params.OutputConfiguration =
+        android.hardware.camera2.params.OutputConfiguration(surface).apply {
+            PhysicalLens.parse(selectedCamera)?.second?.let { setPhysicalCameraId(it) }
+        }
+
+    private fun failCamera2Switch(message: String) {
+        val previous = cameraBeforeSwitch ?: return
+        cameraBeforeSwitch = null
+        selectedCamera = previous
+        streamStateHolder.setCameraSwitchStatus(message)
+        lifecycleScope.launch(Dispatchers.Main) {
+            try {
+                stopCamera2(releaseEncoderSurface = false)
+                startCamera2ToEncoder(requestedWidth, requestedHeight, targetFps)
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to restore previous camera", e)
+            }
+        }
+    }
+
     private fun reconfigureCamera2Session() {
         val session = captureSession ?: return
         val camera = cameraDevice ?: return
@@ -1805,7 +1842,7 @@ class StreamService : LifecycleService() {
             }
             val reconfigSessionConfig = android.hardware.camera2.params.SessionConfiguration(
                 android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                surfaces.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                surfaces.map { physicalOutput(it) },
                 java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                 sessionCb2
             )
@@ -1820,7 +1857,9 @@ class StreamService : LifecycleService() {
             val provider = cameraProvider ?: return
             provider.unbindAll()
             
-            val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+            val id = findCameraId(selectedCamera)
+            val selector = id?.let { buildCameraSelectorForId(it, PhysicalLens.parse(selectedCamera)?.second) }
+                ?: if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
             val useCases = mutableListOf<androidx.camera.core.UseCase>()
             
             analysisUseCase?.let { useCases.add(it) }
