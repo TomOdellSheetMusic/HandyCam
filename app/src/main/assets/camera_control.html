@@ -569,7 +569,7 @@
                     const restart = await fetch('/api/camera/start', { method: 'POST' });
                     const result = await restart.json();
                     if (!restart.ok || !result.success) throw new Error(result.message);
-                    showMessage('Stream restart requested', true);
+                    showMessage(data.message + '; stream restart requested', true);
                 } else {
                     showMessage(data.message, true);
                 }
@@ -724,6 +724,8 @@
                     avcEnabled = !avcEnabled; updateAvcButton(); showMessage(data.message, false); return;
                 }
                 updateAvcButton();
+                showMessage(data.message, true);
+                await checkCameraSettings();
             } catch (e) {
                 avcEnabled = !avcEnabled; updateAvcButton(); showMessage('Failed to set AVC mode: ' + e.message, false);
             }

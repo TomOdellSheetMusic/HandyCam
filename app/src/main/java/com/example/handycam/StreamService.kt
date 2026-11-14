@@ -209,8 +209,13 @@ class StreamService : LifecycleService() {
             StreamActions.START -> {
                 // Reconfigure in one service command so stopSelf cannot race a new start.
                 if (running) {
+                    val preservePreview = intent.getBooleanExtra("preservePreview", false)
+                    val surface = if (preservePreview) cameraStateHolder.previewSurface?.takeIf { it.isValid } else null
+                    val provider = if (preservePreview) cameraStateHolder.previewSurfaceProvider else null
                     unregisterMdns()
-                    stopStreaming()
+                    stopStreaming(keepStreamingState = preservePreview)
+                    cameraStateHolder.previewSurface = surface
+                    cameraStateHolder.previewSurfaceProvider = provider
                 }
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val streamingPort = intent.getIntExtra("streamingPort", 4747)
@@ -224,6 +229,11 @@ class StreamService : LifecycleService() {
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
                 useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                val maxFps = if (useScreenCapture) 60 else FrameRateCapabilities.maxStreamingFps(
+                    getSystemService(Context.CAMERA_SERVICE) as CameraManager,
+                    selectedCamera, width, height, useAvc
+                )
+                targetFps = FrameRateCapabilities.clampTarget(targetFps, maxFps)
                 val mpResultCode = intent.getIntExtra("mediaProjectionResultCode", 0)
                 @Suppress("DEPRECATION")
                 val mpData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -235,6 +245,7 @@ class StreamService : LifecycleService() {
                 // Update state holder
                 streamStateHolder.setStreaming(true)
                 streamStateHolder.setCamera(selectedCamera)
+                streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreamingPort(streamingPort)
                 streamStateHolder.setWidth(width)
                 streamStateHolder.setHeight(height)
@@ -799,7 +810,7 @@ class StreamService : LifecycleService() {
         serverThread?.start()
     }
 
-    private fun stopStreaming() {
+    private fun stopStreaming(keepStreamingState: Boolean = false) {
         running = false
         // stop screen capture if active
         stopScreenCapture()
@@ -845,11 +856,13 @@ class StreamService : LifecycleService() {
         try { serverThread?.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
         serverThread = null
         frameQueue.clear()
-        try {
-            notifyStreamingState(false)
-            val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("isStreaming", false).apply()
-        } catch (_: Exception) {}
+        if (!keepStreamingState) {
+            try {
+                notifyStreamingState(false)
+                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("isStreaming", false).apply()
+            } catch (_: Exception) {}
+        }
     }
 
     // ── Screen capture helpers ──────────────────────────────────────────────
@@ -1641,7 +1654,6 @@ class StreamService : LifecycleService() {
     }
 
     private fun highFrameRateRange(cameraId: String): android.util.Range<Int>? {
-        if (targetFps <= 60) return null
         if (highSpeedCameraSession) {
             return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, requestedWidth, requestedHeight, targetFps)
         }
@@ -1734,12 +1746,34 @@ class StreamService : LifecycleService() {
             streamStateHolder.setCameraSwitchStatus("")
             return
         }
-        if (targetFps > 60 && (!useAvc || targetFps > FrameRateCapabilities.maxStreamingFps(
-                getSystemService(Context.CAMERA_SERVICE) as CameraManager,
-                newCam, requestedWidth, requestedHeight, useAvc
-            ))) {
-            streamStateHolder.setCamera(selectedCamera)
-            streamStateHolder.setCameraSwitchStatus("Stop streaming and lower the frame rate before switching cameras")
+        val maxFps = FrameRateCapabilities.maxStreamingFps(
+            getSystemService(Context.CAMERA_SERVICE) as CameraManager,
+            newCam, requestedWidth, requestedHeight, useAvc
+        )
+        val adjustedFps = FrameRateCapabilities.clampTarget(targetFps, maxFps)
+        // CameraX request options are bound to the old camera. Rebuild the stream when
+        // switching it, or whenever the new camera needs a lower frame rate.
+        if (!useAvc || adjustedFps != targetFps) {
+            val restart = Intent(this, StreamService::class.java).apply {
+                action = StreamActions.START
+                putExtra("host", streamStateHolder.host.value)
+                putExtra("streamingPort", streamStateHolder.streamingPort.value)
+                putExtra("width", requestedWidth)
+                putExtra("height", requestedHeight)
+                putExtra("camera", newCam)
+                putExtra("jpegQuality", jpegQuality)
+                putExtra("targetFps", adjustedFps)
+                putExtra("useAvc", useAvc)
+                putExtra("preservePreview", true)
+                avcBitrateUser?.let { putExtra("avcBitrate", it) }
+            }
+            try {
+                startService(restart)
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to restart stream for camera switch", e)
+                streamStateHolder.setCamera(selectedCamera)
+                streamStateHolder.setCameraSwitchStatus("Could not switch camera")
+            }
             return
         }
         cameraBeforeSwitch = selectedCamera

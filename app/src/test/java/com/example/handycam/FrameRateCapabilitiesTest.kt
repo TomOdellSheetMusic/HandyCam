@@ -19,4 +19,12 @@ class FrameRateCapabilitiesTest {
         assertFalse(limits.needsHighSpeed(90))
         assertTrue(limits.needsHighSpeed(91))
     }
+
+    @Test fun clampsOnlyWhenNewConfigurationRequiresIt() {
+        assertEquals(30, FrameRateCapabilities.clampTarget(120, 30))
+        assertEquals(24, FrameRateCapabilities.clampTarget(24, 30))
+        assertEquals(120, FrameRateCapabilities.clampTarget(120, 120))
+        assertTrue(FrameRateCapabilities.Limits(30, 120).needsHighSpeed(60))
+        assertEquals(30, FrameRateCapabilities.Limits(30, 0).maximum)
+    }
 }
