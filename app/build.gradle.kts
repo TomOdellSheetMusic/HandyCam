@@ -104,6 +104,20 @@ configurations.matching {
     }
 }
 
+// Tooling resolves independently of the buildscript constraints and app runtime.
+configurations.matching {
+    it.name == "androidLintTool" || it.name.startsWith("unified-test-platform-") ||
+        it.name.startsWith("kapt", ignoreCase = true) ||
+        it.name.contains("AnnotationProcessor", ignoreCase = true)
+}.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "com.google.guava" && requested.name == "guava") {
+            useVersion("33.7.2-jre")
+            because("Align Guava on a release with the deserialization fix")
+        }
+    }
+}
+
 // Lint and the UTP result listener have classpaths separate from the buildscript.
 configurations.matching {
     it.name == "androidLintTool" ||
