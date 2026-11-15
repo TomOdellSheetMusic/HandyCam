@@ -19,16 +19,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
+import android.content.ClipData
 import android.media.projection.MediaProjectionManager
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private val FPS_OPTIONS = listOf(15, 30, 60, 120, 240)
@@ -64,6 +66,8 @@ fun MainScreen(
     val avcBitrateValue by viewModel.streamStateHolder.avcBitrate.collectAsState()
 
     val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
     val mediaProjectionManager = remember {
         context.getSystemService(MediaProjectionManager::class.java)
     }
@@ -180,8 +184,9 @@ fun MainScreen(
                         Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(host, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            val clipboard = LocalClipboardManager.current
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(host)) },
+                            IconButton(onClick = {
+                                coroutineScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("IP address", host))) }
+                            },
                                 modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Filled.ContentCopy, contentDescription = "Copy IP",
                                     modifier = Modifier.size(16.dp))
@@ -228,7 +233,8 @@ fun MainScreen(
                                     }
                                 }
                             },
-                            label = { Text(preset.label) }
+                            icon = { if (preset.label != "Custom") SegmentedButtonDefaults.Icon(active = selectedPreset == preset) },
+                            label = { Text(preset.label, maxLines = 1) }
                         )
                     }
                 }
@@ -515,7 +521,6 @@ fun MainScreen(
                 }
                 if (httpsRunning) {
                     val serverUrl = "http://$host:$httpPort/camera"
-                    val clipboard = LocalClipboardManager.current
                     Spacer(Modifier.height(4.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -528,7 +533,9 @@ fun MainScreen(
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(
-                            onClick = { clipboard.setText(AnnotatedString(serverUrl)) },
+                            onClick = {
+                                coroutineScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Server URL", serverUrl))) }
+                            },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
