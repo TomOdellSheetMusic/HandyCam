@@ -49,6 +49,7 @@ class KtorHttpServerService : LifecycleService() {
     @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
     
     @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
+    @javax.inject.Inject lateinit var preferences: com.example.handycam.data.preferences.PreferencesManager
 
     private var startTime: Long = 0
 
@@ -237,6 +238,7 @@ class KtorHttpServerService : LifecycleService() {
                         FrameRateCapabilities.maxStreamingFps(cm, selection, streamStateHolder.width.value, streamStateHolder.height.value, streamStateHolder.useAvc.value),
                     jpegQuality = (streamStateHolder.jpegQuality.value),
                     useAvc = (streamStateHolder.useAvc.value),
+                    useHevc = streamStateHolder.useHevc.value,
                     zoom = (streamStateHolder.zoom.value),
                     zoomRatio = ratio,
                     minZoomRatio = minZoom,
@@ -506,11 +508,40 @@ class KtorHttpServerService : LifecycleService() {
                         FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, streamStateHolder.width.value, streamStateHolder.height.value, enabled)
                     val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
                     val reduced = adjustedFps < streamStateHolder.fps.value
+                    preferences.updateCodec(enabled, false)
                     streamStateHolder.setUseAvc(enabled)
+                    streamStateHolder.setUseHevc(false)
                     streamStateHolder.setFps(adjustedFps)
                     call.respond(ApiResponse(true, "useAvc set to $enabled" + if (reduced) "; target reduced to $adjustedFps fps" else ""))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid use-avc value: ${e.message}"))
+                }
+            }
+
+            post("/api/settings/codec") {
+                try {
+                    val codec = call.receive<Map<String, String>>()["codec"]
+                    if (codec !in setOf("mjpeg", "avc", "hevc")) {
+                        call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Choose MJPEG, H.264, or HEVC"))
+                        return@post
+                    }
+                    if (streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop the stream before changing codec"))
+                        return@post
+                    }
+                    val encoded = codec != "mjpeg"
+                    val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
+                        FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, streamStateHolder.width.value, streamStateHolder.height.value, encoded)
+                    val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
+                    val reduced = adjustedFps < streamStateHolder.fps.value
+                    preferences.updateCodec(encoded, codec == "hevc")
+                    streamStateHolder.setUseHevc(codec == "hevc")
+                    streamStateHolder.setUseAvc(encoded)
+                    streamStateHolder.setFps(adjustedFps)
+                    call.respond(ApiResponse(true, "Codec set to ${codec!!.uppercase()}" + if (reduced) "; target reduced to $adjustedFps fps" else ""))
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Could not change codec: ${e.message}"))
                 }
             }
 

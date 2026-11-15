@@ -146,6 +146,9 @@
             color: var(--accent);
         }
 
+        .codec-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+        .codec-buttons button { flex: 1 1 100px; width: auto; }
+
         .control-row {
             display: flex;
             align-items: center;
@@ -273,7 +276,7 @@
         </div>
 
         <div class="card" id="avcGroup" style="display:none;">
-            <div class="card-title">AVC Bitrate</div>
+            <div class="card-title">Video Bitrate</div>
             <div class="control-row">
                 <label>Bitrate (kbps)</label>
                 <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" oninput="setAvcBitrate(this.value)">
@@ -308,7 +311,11 @@
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
             <div id="torchNote">Torch only works while stream is active</div>
             <div>Stop the stream to change codec.</div>
-            <button class="toggle-btn" id="useAvcBtn" onclick="toggleUseAvc()">Codec: MJPEG</button>
+            <div class="codec-buttons" id="codecButtons" role="group" aria-label="Codec">
+                <button class="toggle-btn" data-codec="mjpeg" onclick="setCodec('mjpeg')" aria-pressed="false" disabled>MJPEG</button>
+                <button class="toggle-btn" data-codec="avc" onclick="setCodec('avc')" aria-pressed="false" disabled>H.264 (AVC)</button>
+                <button class="toggle-btn" data-codec="hevc" onclick="setCodec('hevc')" aria-pressed="false" disabled>H.265 (HEVC)</button>
+            </div>
         </div>
 
         <div class="card">
@@ -335,9 +342,22 @@
         let streaming = false;
         let editingSettings = new Set();
         let torchEnabled = false;
-        let avcEnabled = false;
+        let avcEnabled = true;
+        let codecRequestInFlight = false;
+        let codecLoaded = false;
         let avcBitrate = 2000;
         let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
+
+        function updateCodecButtons(codec) {
+            document.querySelectorAll('#codecButtons button').forEach(button => {
+                if (codec !== undefined) {
+                    const selected = button.dataset.codec === codec;
+                    button.classList.toggle('active', selected);
+                    button.setAttribute('aria-pressed', String(selected));
+                }
+                button.disabled = streaming || codecRequestInFlight || !codecLoaded;
+            });
+        }
 
         function isSelectedCamera(btn) {
             if (btn.dataset.camera === selectedCamera) return true;
@@ -363,7 +383,7 @@
                 const badge = document.getElementById('status');
                 const text = document.getElementById('statusText');
                 streaming = data.streaming === true;
-                document.getElementById('useAvcBtn').disabled = streaming;
+                updateCodecButtons();
                 if (streaming) {
                     text.textContent = 'Streaming on port ' + data.port;
                     badge.className = 'status-badge active';
@@ -437,6 +457,11 @@
 
                 // AVC support: show/hide JPEG vs AVC controls
                 avcEnabled = data.useAvc === true;
+                if (!codecRequestInFlight) {
+                    codecLoaded = true;
+                    streaming = data.streaming === true;
+                    updateCodecButtons(!avcEnabled ? 'mjpeg' : data.useHevc ? 'hevc' : 'avc');
+                }
                 if (!editingSettings.has('avc')) {
                     avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : 2000;
                     document.getElementById('avcSlider').value = avcBitrate;
@@ -477,7 +502,6 @@
                 // Toggles
                 torchEnabled = data.torchEnabled === true;
                 updateToggleButtons();
-                updateAvcButton();
 
             } catch (e) {
                 console.error('Failed to check camera settings:', e);
@@ -487,7 +511,6 @@
 
         function updateToggleButtons() {
             const torchBtn = document.getElementById('torchBtn');
-            const useAvcBtn = document.getElementById('useAvcBtn');
 
             if (torchEnabled) {
                 torchBtn.textContent = 'Torch: ON';
@@ -495,27 +518,6 @@
             } else {
                 torchBtn.textContent = 'Torch: OFF';
                 torchBtn.classList.remove('active');
-            }
-            if (useAvcBtn) {
-                if (avcEnabled) {
-                    useAvcBtn.textContent = 'Codec: H.264 (AVC)';
-                    useAvcBtn.classList.add('active');
-                } else {
-                    useAvcBtn.textContent = 'Codec: MJPEG';
-                    useAvcBtn.classList.remove('active');
-                }
-            }
-        }
-
-        function updateAvcButton() {
-            const useAvcBtn = document.getElementById('useAvcBtn');
-            if (!useAvcBtn) return;
-            if (avcEnabled) {
-                useAvcBtn.textContent = 'Codec: H.264 (AVC)';
-                useAvcBtn.classList.add('active');
-            } else {
-                useAvcBtn.textContent = 'Codec: MJPEG';
-                useAvcBtn.classList.remove('active');
             }
         }
 
@@ -758,23 +760,23 @@
             }
         }
 
-        async function toggleUseAvc() {
-            avcEnabled = !avcEnabled;
+        async function setCodec(codec) {
+            codecRequestInFlight = true;
+            updateCodecButtons();
             try {
-                const response = await fetch('/api/settings/use-avc', {
+                const response = await fetch('/api/settings/codec', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ enabled: avcEnabled })
+                    body: JSON.stringify({ codec })
                 });
                 const data = await response.json();
-                if (!data.success) {
-                    avcEnabled = !avcEnabled; updateAvcButton(); showMessage(data.message, false); return;
-                }
-                updateAvcButton();
-                showMessage(data.message, true);
-                await checkCameraSettings();
+                showMessage(data.message, response.ok && data.success);
             } catch (e) {
-                avcEnabled = !avcEnabled; updateAvcButton(); showMessage('Failed to set AVC mode: ' + e.message, false);
+                showMessage('Failed to set codec: ' + e.message, false);
+            } finally {
+                codecRequestInFlight = false;
+                await checkCameraSettings();
+                updateCodecButtons();
             }
         }
 
