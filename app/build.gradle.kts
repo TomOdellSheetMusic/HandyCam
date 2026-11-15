@@ -130,6 +130,14 @@ configurations.matching {
             useVersion("1.86")
             because("Align the tooling's Bouncy Castle modules on a patched release")
         }
+        if (requested.group == "org.apache.commons" && requested.name == "commons-compress") {
+            useVersion("1.28.0")
+            because("Use a Commons Compress release that depends on patched Commons Lang")
+        }
+        if (requested.group == "org.apache.httpcomponents" && requested.name == "httpclient") {
+            useVersion("4.5.14")
+            because("Use a patched Apache HttpClient release")
+        }
     }
 }
 
