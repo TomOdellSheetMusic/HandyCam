@@ -104,6 +104,21 @@ configurations.matching {
     }
 }
 
+// Lint and the UTP result listener have classpaths separate from the buildscript.
+configurations.matching {
+    it.name == "androidLintTool" ||
+        it.name == "unified-test-platform-android-test-plugin-result-listener-gradle"
+}.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.bouncycastle" &&
+            requested.name in setOf("bcprov-jdk18on", "bcpkix-jdk18on", "bcutil-jdk18on")
+        ) {
+            useVersion("1.86")
+            because("Align the tooling's Bouncy Castle modules on a patched release")
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
