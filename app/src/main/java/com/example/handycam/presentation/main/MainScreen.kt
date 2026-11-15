@@ -59,6 +59,8 @@ fun MainScreen(
     val fpsValue by viewModel.streamStateHolder.fps.collectAsState()
     val jpegQualityValue by viewModel.streamStateHolder.jpegQuality.collectAsState()
     val useAvc by viewModel.streamStateHolder.useAvc.collectAsState()
+    val useHevc by viewModel.streamStateHolder.useHevc.collectAsState()
+    val useHdr by viewModel.streamStateHolder.useHdr.collectAsState()
     val avcBitrateValue by viewModel.streamStateHolder.avcBitrate.collectAsState()
 
     val context = LocalContext.current
@@ -365,17 +367,30 @@ fun MainScreen(
             SectionCard(title = "Codec") {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
-                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                        shape = SegmentedButtonDefaults.itemShape(0, 3),
                         selected = !useAvc,
-                        onClick = { if (!isStreaming) viewModel.updateUseAvc(false) },
+                        onClick = { if (!isStreaming) { viewModel.updateUseHevc(false); viewModel.updateUseAvc(false) } },
                         label = { Text("MJPEG") }
                     )
                     SegmentedButton(
-                        shape = SegmentedButtonDefaults.itemShape(1, 2),
-                        selected = useAvc,
-                        onClick = { if (!isStreaming) viewModel.updateUseAvc(true) },
-                        label = { Text("H.264 (AVC)") }
+                        shape = SegmentedButtonDefaults.itemShape(1, 3),
+                        selected = useAvc && !useHevc,
+                        onClick = { if (!isStreaming) { viewModel.updateUseHevc(false); viewModel.updateUseAvc(true) } },
+                        label = { Text("H.264") }
                     )
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(2, 3),
+                        selected = useAvc && useHevc,
+                        onClick = { if (!isStreaming) { viewModel.updateUseHevc(true); viewModel.updateUseAvc(true) } },
+                        label = { Text("HEVC") }
+                    )
+                }
+                if (useAvc && useHevc && !isScreenSource) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = useHdr, onCheckedChange = { viewModel.streamStateHolder.setUseHdr(it) }, enabled = !isStreaming)
+                        Text("HDR (HLG10, Android 13+)")
+                    }
+                    Text("Requires an HLG10 camera and HEVC Main10 encoder. Select HDR in OBS. Camera preview is unavailable in HDR mode.", style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(Modifier.height(8.dp))
                 if (!useAvc) {

@@ -11,5 +11,6 @@ data class StreamConfig(
     val jpegQuality: Int = 85,
     val fps: Int = 30,
     val useAvc: Boolean = false,
-    val avcBitrate: Int? = null
+    val avcBitrate: Int? = null,
+    val useHevc: Boolean = false
 )
