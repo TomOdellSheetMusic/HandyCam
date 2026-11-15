@@ -22,15 +22,18 @@ jobs:
       - run: chmod +x gradlew
       - run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 
-  review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
-
   dependency-graph:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Submits a dependency-graph snapshot for the PR head SHA (the action resolves
+    # `pull_request` events to `pull_request.head.sha`). `review` needs that
+    # snapshot to exist, so it runs on same-repo PRs too, not just on push.
+    # Excluded: fork PRs and Dependabot PRs, which both get a read-only
+    # GITHUB_TOKEN and so cannot submit snapshots at all.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,3 +44,36 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/dependency-submission@v4
+
+  review:
+    # dependency-review-action compares dependency-graph snapshots for the PR base
+    # and head SHAs, and silently passes when either is missing. Snapshots only
+    # exist for SHAs a dependency-submission run has submitted, so this job waits
+    # for `dependency-graph` to submit the head SHA before reviewing.
+    # Dependabot PRs are skipped rather than run: they cannot submit a snapshot,
+    # so the review would pass without examining anything. Their dependency
+    # changes are covered by Dependabot alerts on the default branch instead.
+    needs: dependency-graph
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          # Only block on vulnerabilities that ship in the app. The Gradle plugin
+          # classpath (settings.gradle.kts) is build-time only and is pinned by AGP,
+          # so flagging it produces alerts we cannot act on.
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          show-patched-versions: true
+          comment-summary-in-pr: on-failure
+          # Snapshot ingestion is eventually consistent, so the snapshot submitted
+          # by `dependency-graph` may not be queryable the instant this job starts.
+          retry-on-snapshot-warnings: true
+          retry-on-snapshot-warnings-timeout: 120
