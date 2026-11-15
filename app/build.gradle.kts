@@ -98,6 +98,19 @@ kotlin {
     }
 }
 
+// UTP runs in separate configurations from the app and its Netty BOM.
+configurations.matching {
+    it.name == "unified-test-platform-core" ||
+        it.name == "unified-test-platform-android-test-plugin-host-emulator-control"
+}.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "io.netty") {
+            useVersion("4.1.137.Final")
+            because("Align test-platform Netty modules on a patched 4.1 release")
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
