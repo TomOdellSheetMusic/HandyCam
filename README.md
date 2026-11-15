@@ -53,11 +53,7 @@ If you already added the nightly build, edit its Obtainium settings: enable **In
 - Samsung A50 Android 11
 
 ## ToDo
-- Implement new HEVC feature from droidcam plugin
-- Clean up Code
 - Remote Control Camera Focus
-- Auto-Disover Phone Camera Capabilites
-- Document restAPI
 - Squash Bugs
 
 ## Build Instructions
