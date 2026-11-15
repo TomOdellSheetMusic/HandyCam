@@ -29,6 +29,7 @@ data class CameraStatusResponse(
     val maxFps: Int,
     val jpegQuality: Int,
     val useAvc: Boolean,
+    val useHevc: Boolean,
     val zoom: Float,
     val zoomRatio: Float,
     val minZoomRatio: Float,

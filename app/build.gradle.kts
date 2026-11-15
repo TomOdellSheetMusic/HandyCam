@@ -3,9 +3,8 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.legacy.kapt)
     alias(libs.plugins.kotlin.compose)
-    id("kotlin-kapt")
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -92,9 +91,16 @@ android {
     }
 }
 
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+// UTP runs in separate configurations from the app and its Netty BOM.
+configurations.matching {
+    it.name == "unified-test-platform-core" ||
+        it.name == "unified-test-platform-android-test-plugin-host-emulator-control"
+}.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "io.netty") {
+            useVersion("4.1.137.Final")
+            because("Align test-platform Netty modules on a patched 4.1 release")
+        }
     }
 }
 

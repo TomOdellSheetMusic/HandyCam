@@ -142,6 +142,13 @@ class PreferencesManager(private val context: Context) {
         dataStore.edit { it[PreferenceKeys.USE_HEVC] = value }
     }
 
+    suspend fun updateCodec(useAvc: Boolean, useHevc: Boolean) {
+        dataStore.edit {
+            it[PreferenceKeys.USE_AVC] = useAvc
+            it[PreferenceKeys.USE_HEVC] = useHevc
+        }
+    }
+
     suspend fun updateAvcBitrate(bitrate: Int?) {
         dataStore.edit { preferences ->
             if (bitrate != null) {
