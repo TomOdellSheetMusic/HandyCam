@@ -347,6 +347,7 @@
         let codecLoaded = false;
         let avcBitrate = 2000;
         let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
+        let fpsConfiguration = null;
 
         function updateCodecButtons(codec) {
             document.querySelectorAll('#codecButtons button').forEach(button => {
@@ -362,10 +363,7 @@
         function isSelectedCamera(btn) {
             if (btn.dataset.camera === selectedCamera) return true;
             if (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true') return true;
-            if (selectedCamera === btn.dataset.sensorId && btn.dataset.camera.startsWith('physical:')) return true;
-            const parts = selectedCamera.split(':');
-            return parts.length === 3 && parts[0] === 'physical' &&
-                btn.dataset.sensorId === decodeURIComponent(parts[2]);
+            return false;
         }
 
         function showMessage(text, isSuccess) {
@@ -429,6 +427,9 @@
 
                 // Sliders
                 const fpsSlider = document.getElementById('fpsSlider');
+                const configuration = JSON.stringify([data.camera, data.width, data.height, data.useAvc, data.useHevc, data.maxFps]);
+                if (fpsConfiguration !== null && fpsConfiguration !== configuration) editingSettings.delete('fps');
+                fpsConfiguration = configuration;
                 fpsSlider.max = data.maxFps || 60;
                 renderFpsPresets(Number(fpsSlider.max));
                 if (!editingSettings.has('fps')) fpsSlider.value = data.fps;

@@ -50,6 +50,7 @@ class KtorHttpServerService : LifecycleService() {
     
     @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
     @javax.inject.Inject lateinit var preferences: com.example.handycam.data.preferences.PreferencesManager
+    @javax.inject.Inject lateinit var cameraRepository: com.example.handycam.data.repository.CameraRepository
 
     private var startTime: Long = 0
 
@@ -257,61 +258,9 @@ class KtorHttpServerService : LifecycleService() {
             }
 
             get("/api/camera/list") {
-                val list = mutableListOf<CameraListItem>()
-                val seenPhysicalIds = mutableSetOf<String>()
-                try {
-                    val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    for (id in cm.cameraIdList) {
-                        try {
-                            val chars = cm.getCameraCharacteristics(id)
-                            val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
-                                CameraCharacteristics.LENS_FACING_FRONT -> "front"
-                                CameraCharacteristics.LENS_FACING_BACK -> "back"
-                                else -> "external"
-                            }
-                            fun addEntry(key: String, cameraId: String, logical: Boolean) {
-                                if (!logical && cameraId in seenPhysicalIds) return
-                                val info = cm.getCameraCharacteristics(cameraId)
-                                val focal = info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
-                                val focalDesc = focal?.let { String.format(java.util.Locale.US, "%.1f mm", it) } ?: ""
-                                val size = info.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                                val equivalent = if (focal != null && size != null && size.width > 0f && size.height > 0f)
-                                    focal * 43.27f / kotlin.math.sqrt(size.width * size.width + size.height * size.height) else null
-                                val name = when {
-                                    logical && facing == "back" -> "Back (auto)"
-                                    logical && facing == "front" -> "Front (auto)"
-                                    logical -> "External (auto)"
-                                    facing == "front" -> "Front"
-                                    facing != "back" -> "External"
-                                    equivalent == null -> "Back camera"
-                                    equivalent < 20f -> "Ultra-wide (estimated)"
-                                    equivalent > 45f -> "Telephoto (estimated)"
-                                    else -> "Wide (estimated)"
-                                }
-                                if (!logical) seenPhysicalIds.add(cameraId)
-                                list.add(CameraListItem(key, name, facing, focalDesc, cameraId))
-                            }
-                            addEntry(id, id, chars.physicalCameraIds.isNotEmpty())
-                            chars.physicalCameraIds.forEach { physical ->
-                                try { addEntry(PhysicalLens.key(id, physical), physical, false) } catch (_: Exception) { }
-                            }
-                        } catch (_: Exception) { }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Camera enumeration failed", e)
-                }
-
-                val totals = list.groupingBy { it.label }.eachCount()
-                val counts = mutableMapOf<String, Int>()
-                val labelled = list.map { item ->
-                    val name = if ((totals[item.label] ?: 0) <= 1) item.label else {
-                        val number = (counts[item.label] ?: 0) + 1
-                        counts[item.label] = number
-                        "${item.label} $number"
-                    }
-                    item.copy(label = listOf(name, item.focalDesc).filter { it.isNotEmpty() }.joinToString(" - "))
-                }
-                call.respond(labelled)
+                call.respond(cameraRepository.getAvailableCameras().map { camera ->
+                    CameraListItem(camera.id, camera.displayName, camera.facing, camera.focalLength ?: "", camera.id)
+                })
             }
             
             post("/api/camera/start") {
