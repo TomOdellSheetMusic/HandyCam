@@ -201,10 +201,12 @@
             margin: 0;
         }
 
-        #torchNote {
+        .control-note {
             font-size: 0.8rem;
             color: var(--error-text);
             margin-top: 4px;
+        }
+        #torchNote, #codecNote {
             display: none;
         }
         button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -309,13 +311,13 @@
         <div class="card">
             <div class="card-title">Controls</div>
             <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
-            <div id="torchNote">Torch only works while stream is active</div>
-            <div>Stop the stream to change codec.</div>
+            <div class="control-note" id="torchNote">Torch only works while stream is active</div>
             <div class="codec-buttons" id="codecButtons" role="group" aria-label="Codec">
                 <button class="toggle-btn" data-codec="mjpeg" onclick="setCodec('mjpeg')" aria-pressed="false" disabled>MJPEG</button>
                 <button class="toggle-btn" data-codec="avc" onclick="setCodec('avc')" aria-pressed="false" disabled>H.264 (AVC)</button>
                 <button class="toggle-btn" data-codec="hevc" onclick="setCodec('hevc')" aria-pressed="false" disabled>H.265 (HEVC)</button>
             </div>
+            <div class="control-note" id="codecNote">Stop the stream to change codec.</div>
         </div>
 
         <div class="card">
@@ -350,6 +352,7 @@
         let fpsConfiguration = null;
 
         function updateCodecButtons(codec) {
+            document.getElementById('codecNote').style.display = streaming ? 'block' : 'none';
             document.querySelectorAll('#codecButtons button').forEach(button => {
                 if (codec !== undefined) {
                     const selected = button.dataset.codec === codec;
