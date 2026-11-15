@@ -3,9 +3,8 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.legacy.kapt)
     alias(libs.plugins.kotlin.compose)
-    id("kotlin-kapt")
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -89,12 +88,6 @@ android {
     }
     buildFeatures {
         compose = true
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     }
 }
 
