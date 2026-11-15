@@ -255,10 +255,10 @@
             <div class="card-title">Stream Info</div>
             <div class="info-grid">
                 <span class="key">Port</span>       <span class="val" id="port">-</span>
-                <span class="key">Camera</span>     <span class="val" id="camera">-</span>
+                <span class="key">Source</span>     <span class="val" id="camera">-</span>
                 <span class="key">Resolution</span> <span class="val" id="resolution">-</span>
                 <span class="key">FPS</span>        <span class="val" id="fps">-</span>
-                <span class="key">JPEG Quality</span> <span class="val" id="jpegQuality">-</span>
+                <span class="key" id="jpegQualityLabel">JPEG Quality</span> <span class="val" id="jpegQuality">-</span>
             </div>
         </div>
 
@@ -272,6 +272,7 @@
             <div class="card-title">Camera Selection</div>
             <div id="cameraSwitchStatus" role="status"></div>
             <div class="camera-btn-row" id="cameraButtons">Loading...</div>
+            <div class="control-note" id="screenSource" hidden>Screenshare selected · Start screen capture from the app.</div>
         </div>
 
         <div class="card">
@@ -345,8 +346,10 @@
 
         <div class="card">
             <div class="card-title">Controls</div>
-            <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
-            <div class="control-note" id="torchNote">Torch only works while stream is active</div>
+            <div id="torchControls">
+                <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
+                <div class="control-note" id="torchNote">Torch only works while stream is active</div>
+            </div>
             <div class="codec-buttons" id="codecButtons" role="group" aria-label="Codec">
                 <button class="toggle-btn" data-codec="mjpeg" onclick="setCodec('mjpeg')" aria-pressed="false" disabled>MJPEG</button>
                 <button class="toggle-btn" data-codec="avc" onclick="setCodec('avc')" aria-pressed="false" disabled>H.264 (AVC)</button>
@@ -385,6 +388,7 @@
         let avcBitrate = -1;
         let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
         let fpsConfiguration = null;
+        let screenSource = false;
 
         function updateCodecButtons(codec) {
             document.getElementById('codecNote').style.display = streaming ? 'block' : 'none';
@@ -399,6 +403,7 @@
         }
 
         function isSelectedCamera(btn) {
+            if (screenSource) return false;
             if (btn.dataset.camera === selectedCamera) return true;
             if (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true') return true;
             return false;
@@ -417,7 +422,6 @@
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
-
                 const badge = document.getElementById('status');
                 const text = document.getElementById('statusText');
                 streaming = data.streaming === true;
@@ -448,6 +452,16 @@
                 }
 
                 const data = await response.json();
+                screenSource = data.useScreenCapture === true;
+                streaming = data.streaming === true;
+                document.getElementById('exposureCard').hidden = screenSource;
+                document.getElementById('zoomCard').hidden = screenSource;
+                document.getElementById('torchControls').hidden = screenSource;
+                document.getElementById('jpegQualityLabel').hidden = data.useAvc === true;
+                document.getElementById('jpegQuality').hidden = data.useAvc === true;
+                const screenIndicator = document.getElementById('screenSource');
+                screenIndicator.hidden = !screenSource;
+                screenIndicator.textContent = streaming ? 'Screen capture is active.' : 'Screen selected · Start screen capture from the app.';
 
                 // Streaming state
                 if (data.streaming) {
@@ -458,7 +472,7 @@
 
                 // Text fields
                 document.getElementById('port').textContent = data.port;
-                document.getElementById('camera').textContent = data.camera;
+                document.getElementById('camera').textContent = screenSource ? 'Screen' : data.camera;
                 document.getElementById('resolution').textContent =
                     `${data.width}x${data.height}`;
                 if (!editingSettings.has('resolution')) {
@@ -471,7 +485,7 @@
 
                 // Sliders
                 const fpsSlider = document.getElementById('fpsSlider');
-                const configuration = JSON.stringify([data.camera, data.width, data.height, data.useAvc, data.useHevc, data.maxFps]);
+                const configuration = JSON.stringify([data.camera, data.useScreenCapture, data.width, data.height, data.useAvc, data.useHevc, data.maxFps]);
                 if (fpsConfiguration !== null && fpsConfiguration !== configuration) editingSettings.delete('fps');
                 fpsConfiguration = configuration;
                 fpsSlider.max = data.maxFps || 60;
@@ -496,7 +510,7 @@
                 document.querySelectorAll('#cameraButtons button').forEach(btn => {
                     const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
-                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.disabled = cameraSwitchStatus === 'switching' || (screenSource && streaming);
                     btn.setAttribute('aria-pressed', String(active));
                 });
 
@@ -610,17 +624,20 @@
             const value = Number(input.value);
             const max = Number(input.max);
             const valid = input.value !== '' && Number.isInteger(value) && value >= 1 && value <= max;
+            const locked = screenSource && streaming;
+            input.disabled = locked;
             document.getElementById('fpsValue').textContent = input.value;
             document.querySelectorAll('#fpsPresets button').forEach(button => {
                 const selected = Number(button.dataset.fps) === value;
                 button.classList.toggle('active', selected);
+                button.disabled = locked;
                 button.setAttribute('aria-pressed', String(selected));
             });
-            document.getElementById('fpsHint').textContent = valid ?
+            document.getElementById('fpsHint').textContent = locked ? 'Stop screen capture before changing frame rate.' : valid ?
                 `Available: 1–${max} fps. Actual frame rate may vary.` :
                 `Choose a frame rate from 1 to ${max}.`;
-            document.getElementById('applyFpsBtn').disabled = !valid;
-            return valid;
+            document.getElementById('applyFpsBtn').disabled = !valid || locked;
+            return valid && !locked;
         }
 
         function renderFpsPresets(max) {
@@ -873,7 +890,7 @@
                     seenFacings.add(item.facing);
                     const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
-                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.disabled = cameraSwitchStatus === 'switching' || (screenSource && streaming);
                     btn.setAttribute('aria-pressed', String(active));
                     btn.onclick = () => {
                         switchCamera(item.id);

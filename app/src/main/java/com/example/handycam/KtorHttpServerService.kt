@@ -230,6 +230,7 @@ class KtorHttpServerService : LifecycleService() {
                     streaming = (streamStateHolder.isStreaming.value),
                     port = (streamStateHolder.streamingPort.value),
                     camera = (streamStateHolder.camera.value),
+                    useScreenCapture = streamStateHolder.useScreenCapture.value,
                     cameraSwitchStatus = streamStateHolder.cameraSwitchStatus.value,
                     requestedCamera = streamStateHolder.requestedCamera.value,
                     width = (streamStateHolder.width.value),
@@ -266,8 +267,8 @@ class KtorHttpServerService : LifecycleService() {
             post("/api/camera/start") {
 
                 try {
-                    if (streamStateHolder.isStreaming.value && streamStateHolder.useScreenCapture.value) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture and start it again from the app"))
+                    if (streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Start screen capture from the app"))
                         return@post
                     }
                     if (!streamStateHolder.isStreaming.value && !isAppInForeground()) {
@@ -361,6 +362,10 @@ class KtorHttpServerService : LifecycleService() {
             
             post("/api/camera/switch") {
                 try {
+                    if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before switching cameras"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, String>>()
                     val camera = params["camera"] ?: throw IllegalArgumentException("Missing camera")
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -387,6 +392,9 @@ class KtorHttpServerService : LifecycleService() {
                         }
                         call.respond(ApiResponse(true, if (reduced) "Switching camera and reducing target to $adjustedFps fps" else "Switching camera"))
                     } else {
+                        preferences.updateUseScreenCapture(false)
+                        preferences.updateCamera(camera)
+                        streamStateHolder.setUseScreenCapture(false)
                         streamStateHolder.setCamera(camera)
                         streamStateHolder.setFps(adjustedFps)
                         streamStateHolder.setCameraSwitchStatus("")
@@ -401,6 +409,10 @@ class KtorHttpServerService : LifecycleService() {
             // New endpoints for all controls
             post("/api/settings/fps") {
                 try {
+                    if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before changing frame rate"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, Int>>()
                     val fps = params["fps"] ?: 30
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager

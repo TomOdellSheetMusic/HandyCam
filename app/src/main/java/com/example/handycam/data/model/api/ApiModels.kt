@@ -21,6 +21,7 @@ data class CameraStatusResponse(
     val streaming: Boolean,
     val port: Int,
     val camera: String,
+    val useScreenCapture: Boolean,
     val cameraSwitchStatus: String,
     val requestedCamera: String,
     val width: Int,
