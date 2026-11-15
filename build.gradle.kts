@@ -15,6 +15,7 @@ buildscript {
             classpath("org.bitbucket.b_c:jose4j:0.9.6")
             classpath("org.jdom:jdom2:2.0.6.1")
             classpath("org.apache.commons:commons-compress:1.26.0")
+            classpath("org.apache.commons:commons-lang3:3.18.0")
             classpath("io.opentelemetry:opentelemetry-api:1.67.0")
             classpath("io.opentelemetry:opentelemetry-context:1.67.0")
         }
