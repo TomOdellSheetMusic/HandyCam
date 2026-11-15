@@ -275,7 +275,7 @@
             <div class="control-note" id="screenSource" hidden>Screenshare selected · Start screen capture from the app.</div>
         </div>
 
-        <div class="card">
+        <div class="card" id="resolutionCard">
             <div class="card-title">Resolution</div>
             <div class="fps-presets" aria-label="Resolution presets">
                 <button class="btn-secondary" onclick="setResolution(1280, 720)">720p</button>
@@ -457,6 +457,7 @@
                 document.getElementById('exposureCard').hidden = screenSource;
                 document.getElementById('zoomCard').hidden = screenSource;
                 document.getElementById('torchControls').hidden = screenSource;
+                document.getElementById('resolutionCard').hidden = screenSource;
                 document.getElementById('jpegQualityLabel').hidden = data.useAvc === true;
                 document.getElementById('jpegQuality').hidden = data.useAvc === true;
                 const screenIndicator = document.getElementById('screenSource');
@@ -475,7 +476,7 @@
                 document.getElementById('camera').textContent = screenSource ? 'Screen' : data.camera;
                 document.getElementById('resolution').textContent =
                     `${data.width}x${data.height}`;
-                if (!editingSettings.has('resolution')) {
+                if (!screenSource && !editingSettings.has('resolution')) {
                     document.getElementById('resolutionWidth').value = data.width;
                     document.getElementById('resolutionHeight').value = data.height;
                 }

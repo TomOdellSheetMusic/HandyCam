@@ -233,8 +233,8 @@ class KtorHttpServerService : LifecycleService() {
                     useScreenCapture = streamStateHolder.useScreenCapture.value,
                     cameraSwitchStatus = streamStateHolder.cameraSwitchStatus.value,
                     requestedCamera = streamStateHolder.requestedCamera.value,
-                    width = (streamStateHolder.width.value),
-                    height = (streamStateHolder.height.value),
+                    width = if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) streamStateHolder.screenSize.value?.first ?: streamStateHolder.width.value else streamStateHolder.width.value,
+                    height = if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) streamStateHolder.screenSize.value?.second ?: streamStateHolder.height.value else streamStateHolder.height.value,
                     fps = (streamStateHolder.fps.value),
                     maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
                         FrameRateCapabilities.maxStreamingFps(cm, selection, streamStateHolder.width.value, streamStateHolder.height.value, streamStateHolder.useAvc.value),
@@ -428,8 +428,8 @@ class KtorHttpServerService : LifecycleService() {
 
             post("/api/settings/resolution") {
                 try {
-                    if (streamStateHolder.isStreaming.value && streamStateHolder.useScreenCapture.value) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before changing resolution"))
+                    if (streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Screen capture uses the display resolution"))
                         return@post
                     }
                     val params = call.receive<Map<String, Int>>()

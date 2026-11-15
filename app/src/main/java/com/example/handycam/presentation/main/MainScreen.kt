@@ -215,62 +215,66 @@ fun MainScreen(
             // ── Video ─────────────────────────────────────────────────
             SectionCard(title = "Video") {
                 // Resolution presets
-                Text("Resolution", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    RESOLUTION_PRESETS.forEachIndexed { i, preset ->
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(i, RESOLUTION_PRESETS.size),
-                            selected = selectedPreset == preset,
-                            onClick = {
-                                if (!isStreaming) {
-                                    selectedPreset = preset
-                                    if (preset.label != "Custom") {
-                                        viewModel.updateResolution(preset.width, preset.height)
-                                    } else {
-                                        customWidth = width.toString()
-                                        customHeight = height.toString()
+                if (!isScreenSource) {
+                    Text("Resolution", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        RESOLUTION_PRESETS.forEachIndexed { i, preset ->
+                            SegmentedButton(
+                                shape = SegmentedButtonDefaults.itemShape(i, RESOLUTION_PRESETS.size),
+                                selected = selectedPreset == preset,
+                                enabled = !isStreaming && !isScreenSource,
+                                onClick = {
+                                    if (!isStreaming) {
+                                        selectedPreset = preset
+                                        if (preset.label != "Custom") {
+                                            viewModel.updateResolution(preset.width, preset.height)
+                                        } else {
+                                            customWidth = width.toString()
+                                            customHeight = height.toString()
+                                        }
                                     }
-                                }
-                            },
-                            icon = { if (preset.label != "Custom") SegmentedButtonDefaults.Icon(active = selectedPreset == preset) },
-                            label = { Text(preset.label, maxLines = 1) }
-                        )
+                                },
+                                icon = { if (preset.label != "Custom") SegmentedButtonDefaults.Icon(active = selectedPreset == preset) },
+                                label = { Text(preset.label, maxLines = 1) }
+                            )
+                        }
                     }
-                }
 
-                if (selectedPreset.label == "Custom") {
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = customWidth,
-                            onValueChange = {
-                                customWidth = it
-                                val parsedWidth = it.toIntOrNull()
-                                val parsedHeight = customHeight.toIntOrNull()
-                                if (parsedWidth != null && parsedHeight != null) {
-                                    viewModel.updateResolution(parsedWidth, parsedHeight)
-                                }
-                            },
-                            label = { Text("Width") }, modifier = Modifier.weight(1f),
-                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            enabled = !isStreaming
-                        )
-                        OutlinedTextField(
-                            value = customHeight,
-                            onValueChange = {
-                                customHeight = it
-                                val parsedWidth = customWidth.toIntOrNull()
-                                val parsedHeight = it.toIntOrNull()
-                                if (parsedWidth != null && parsedHeight != null) {
-                                    viewModel.updateResolution(parsedWidth, parsedHeight)
-                                }
-                            },
-                            label = { Text("Height") }, modifier = Modifier.weight(1f),
-                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            enabled = !isStreaming
-                        )
+                    if (selectedPreset.label == "Custom") {
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = customWidth,
+                                onValueChange = {
+                                    customWidth = it
+                                    val parsedWidth = it.toIntOrNull()
+                                    val parsedHeight = customHeight.toIntOrNull()
+                                    if (parsedWidth != null && parsedHeight != null) {
+                                        viewModel.updateResolution(parsedWidth, parsedHeight)
+                                    }
+                                },
+                                label = { Text("Width") }, modifier = Modifier.weight(1f),
+                                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                enabled = !isStreaming && !isScreenSource
+                            )
+                            OutlinedTextField(
+                                value = customHeight,
+                                onValueChange = {
+                                    customHeight = it
+                                    val parsedWidth = customWidth.toIntOrNull()
+                                    val parsedHeight = it.toIntOrNull()
+                                    if (parsedWidth != null && parsedHeight != null) {
+                                        viewModel.updateResolution(parsedWidth, parsedHeight)
+                                    }
+                                },
+                                label = { Text("Height") }, modifier = Modifier.weight(1f),
+                                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                enabled = !isStreaming && !isScreenSource
+                            )
+                        }
                     }
+
                 }
 
                 Spacer(Modifier.height(4.dp))

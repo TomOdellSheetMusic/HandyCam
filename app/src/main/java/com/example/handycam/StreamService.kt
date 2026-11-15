@@ -221,8 +221,13 @@ class StreamService : LifecycleService() {
                 }
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val streamingPort = intent.getIntExtra("streamingPort", 4747)
-                val width = intent.getIntExtra("width", 1080)
-                val height = intent.getIntExtra("height", 1920)
+                val screenCaptureRequested = intent.getBooleanExtra("useScreenCapture", false)
+                val screenSize = if (screenCaptureRequested) android.graphics.Point().also { size ->
+                    @Suppress("DEPRECATION")
+                    (getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealSize(size)
+                } else null
+                val width = screenSize?.x ?: intent.getIntExtra("width", 1080)
+                val height = screenSize?.y ?: intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
@@ -231,7 +236,7 @@ class StreamService : LifecycleService() {
                 setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
-                useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                useScreenCapture = screenCaptureRequested
                 useHdr = useHevc && !useScreenCapture && intent.getBooleanExtra("useHdr", false)
                 val maxFps = if (useScreenCapture) 60 else FrameRateCapabilities.maxStreamingFps(
                     getSystemService(Context.CAMERA_SERVICE) as CameraManager,
@@ -251,8 +256,10 @@ class StreamService : LifecycleService() {
                 streamStateHolder.setCamera(selectedCamera)
                 streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreamingPort(streamingPort)
-                streamStateHolder.setWidth(width)
-                streamStateHolder.setHeight(height)
+                if (useScreenCapture) streamStateHolder.setScreenSize(width, height) else {
+                    streamStateHolder.setWidth(width)
+                    streamStateHolder.setHeight(height)
+                }
                 streamStateHolder.setJpegQuality(jpegQuality)
                 streamStateHolder.setFps(targetFps)
                 streamStateHolder.setUseAvc(useAvc)
@@ -641,8 +648,8 @@ class StreamService : LifecycleService() {
         // Always stream in landscape — swap if portrait dimensions were passed
         requestedWidth = width
         requestedHeight = height
-        val w = maxOf(width, height)
-        val h = minOf(width, height)
+        val w = if (screenCapture) width else maxOf(width, height)
+        val h = if (screenCapture) height else minOf(width, height)
         // store runtime options
         selectedCamera = camera
         jpegQuality = jpegQ
