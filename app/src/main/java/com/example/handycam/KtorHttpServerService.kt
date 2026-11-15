@@ -43,7 +43,7 @@ private const val NOTIF_ID = 2001
 @dagger.hilt.android.AndroidEntryPoint
 class KtorHttpServerService : LifecycleService() {
     
-    private var server: NettyApplicationEngine? = null
+    private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
     private var httpPort = 8080
     private var isRunning = false
     @javax.inject.Inject lateinit var streamStateHolder: com.example.handycam.service.StreamStateHolder
