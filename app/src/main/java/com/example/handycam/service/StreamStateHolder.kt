@@ -51,8 +51,16 @@ class StreamStateHolder @Inject constructor() {
     private val _jpegQuality = MutableStateFlow(85)
     val jpegQuality: StateFlow<Int> = _jpegQuality.asStateFlow()
 
-    private val _useAvc = MutableStateFlow(false)
+    private val _useAvc = MutableStateFlow(true)
     val useAvc: StateFlow<Boolean> = _useAvc.asStateFlow()
+
+    private val _useHevc = MutableStateFlow(false)
+    val useHevc: StateFlow<Boolean> = _useHevc.asStateFlow()
+    fun setUseHevc(value: Boolean) { _useHevc.value = value }
+
+    private val _useHdr = MutableStateFlow(false)
+    val useHdr: StateFlow<Boolean> = _useHdr.asStateFlow()
+    fun setUseHdr(value: Boolean) { _useHdr.value = value }
 
     private val _avcBitrate = MutableStateFlow(-1)
     val avcBitrate: StateFlow<Int> = _avcBitrate.asStateFlow()

@@ -1,3 +1,12 @@
+buildscript {
+    dependencies {
+        // Keep AGP's related Bouncy Castle modules aligned on a current release.
+        classpath("org.bouncycastle:bcprov-jdk18on:1.86")
+        classpath("org.bouncycastle:bcpkix-jdk18on:1.86")
+        classpath("org.bouncycastle:bcutil-jdk18on:1.86")
+    }
+}
+
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
     alias(libs.plugins.android.application) apply false

@@ -138,6 +138,8 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     
     // HTTP control server
+    // Align Netty modules to a release containing the TLS and IP filter fixes.
+    implementation(platform(libs.netty.bom))
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.content.negotiation)

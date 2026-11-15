@@ -33,6 +33,7 @@ class PreferencesManager(private val context: Context) {
         val JPEG_QUALITY = intPreferencesKey("jpeg_quality")
         val FPS = intPreferencesKey("fps")
         val USE_AVC = booleanPreferencesKey("use_avc")
+        val USE_HEVC = booleanPreferencesKey("use_hevc")
         val AVC_BITRATE = intPreferencesKey("avc_bitrate")
         val USE_SCREEN_CAPTURE = booleanPreferencesKey("use_screen_capture")
         val IS_STREAMING = booleanPreferencesKey("is_streaming")
@@ -66,8 +67,9 @@ class PreferencesManager(private val context: Context) {
                 height = preferences[PreferenceKeys.HEIGHT] ?: 1080,
                 jpegQuality = preferences[PreferenceKeys.JPEG_QUALITY] ?: 85,
                 fps = preferences[PreferenceKeys.FPS] ?: 30,
-                useAvc = preferences[PreferenceKeys.USE_AVC] ?: false,
-                avcBitrate = preferences[PreferenceKeys.AVC_BITRATE]
+                useAvc = preferences[PreferenceKeys.USE_AVC] ?: true,
+                avcBitrate = preferences[PreferenceKeys.AVC_BITRATE],
+                useHevc = preferences[PreferenceKeys.USE_HEVC] ?: false
             )
         }
 
@@ -106,6 +108,7 @@ class PreferencesManager(private val context: Context) {
             preferences[PreferenceKeys.JPEG_QUALITY] = config.jpegQuality
             preferences[PreferenceKeys.FPS] = config.fps
             preferences[PreferenceKeys.USE_AVC] = config.useAvc
+            preferences[PreferenceKeys.USE_HEVC] = config.useHevc
             config.avcBitrate?.let { preferences[PreferenceKeys.AVC_BITRATE] = it }
         }
     }
@@ -133,6 +136,10 @@ class PreferencesManager(private val context: Context) {
         dataStore.edit { preferences ->
             preferences[PreferenceKeys.USE_AVC] = useAvc
         }
+    }
+
+    suspend fun updateUseHevc(value: Boolean) {
+        dataStore.edit { it[PreferenceKeys.USE_HEVC] = value }
     }
 
     suspend fun updateAvcBitrate(bitrate: Int?) {

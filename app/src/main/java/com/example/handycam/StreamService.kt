@@ -64,7 +64,7 @@ private const val NOTIF_ID = 1001
 class StreamService : LifecycleService() {
     // AVC needs a deeper queue to absorb I-frame bursts without dropping reference frames.
     // MJPEG only ever needs the latest frame, but we share one queue so use the larger size.
-    private data class TimedFrame(val data: ByteArray, val ptsUs: Long)
+    private data class TimedFrame(val data: ByteArray, val ptsUs: Long, val keyFrame: Boolean = false)
 
     private val frameQueue = LinkedBlockingQueue<TimedFrame>(16)
     private var encoderDroppedFrames = 0
@@ -79,12 +79,14 @@ class StreamService : LifecycleService() {
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
     private var highSpeedCameraSession = false
-    private var useAvc: Boolean = false
+    private var useAvc: Boolean = true
+    private var useHevc: Boolean = false
+    private var useHdr: Boolean = false
     private var requestedWidth: Int = 1280
     private var requestedHeight: Int = 720
 
     private var encoder: MediaCodec? = null
-    private var avcConfig: ByteArray? = null
+    @Volatile private var avcConfig: ByteArray? = null
     private var avcBitrateUser: Int? = null
     // Camera2 + encoder surfaces
     private var cameraManager: CameraManager? = null
@@ -224,11 +226,13 @@ class StreamService : LifecycleService() {
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
-                useAvc = intent.getBooleanExtra("useAvc", false)
+                useAvc = intent.getBooleanExtra("useAvc", true)
+                useHevc = useAvc && intent.getBooleanExtra("useHevc", false)
                 setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
                 useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                useHdr = useHevc && !useScreenCapture && intent.getBooleanExtra("useHdr", false)
                 val maxFps = if (useScreenCapture) 60 else FrameRateCapabilities.maxStreamingFps(
                     getSystemService(Context.CAMERA_SERVICE) as CameraManager,
                     selectedCamera, width, height, useAvc
@@ -838,13 +842,8 @@ class StreamService : LifecycleService() {
         cameraStateHolder.setEncoderSize(0, 0)
         cameraStateHolder.setExposureRange(0, 0)
 
-        try {
-            // stop and release encoder after camera surfaces are torn down
-            encoder?.stop()
-            encoder?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping/releasing encoder", e)
-        }
+        try { encoder?.stop() } catch (_: Exception) {}
+        try { encoder?.release() } catch (e: Exception) { Log.w(TAG, "Error releasing encoder", e) }
         encoder = null
         avcConfig = null
         try {
@@ -978,7 +977,7 @@ class StreamService : LifecycleService() {
     }
 
       private fun setupEncoder(width: Int, height: Int, fps: Int) {
-        val mime = "video/avc"
+        val mime = if (useHevc) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
         // choose a higher-quality bitrate: allow a user-specified bitrate override,
         // otherwise derive a reasonable default (pixels * fps / 10)
         // use a more generous default bitrate (pixels * fps / 6) to reduce blocking artifacts
@@ -992,14 +991,22 @@ class StreamService : LifecycleService() {
             setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.coerceAtLeast(1).toFloat())
             // Shorter I-frame interval = faster recovery from dropped/corrupt frames
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
+            if (useHdr) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_HLG)
+                setFeatureEnabled(MediaCodecInfo.CodecCapabilities.FEATURE_HdrEditing, true)
+            }
             try {
                 // CBR keeps bitrate predictable so the frame queue doesn't burst-overflow
                 setInteger(MediaFormat.KEY_BITRATE_MODE, android.media.MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             } catch (_: Exception) {}
         }
 
-        val encoderName = if (fps > 60) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+        val encoderName = if (fps > 60 || useHdr) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
             .findEncoderForFormat(format) else null
+        if (useHdr && encoderName == null) throw IllegalStateException("No compatible HEVC Main10 HDR encoder")
         encoder = if (encoderName != null) MediaCodec.createByCodecName(encoderName)
             else MediaCodec.createEncoderByType(mime)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -1031,16 +1038,17 @@ class StreamService : LifecycleService() {
                         if (outIndex >= 0) {
                             val outBuf = codec.getOutputBuffer(outIndex)
                             val outBytes = ByteArray(info.size)
-                            outBuf?.get(outBytes)
+                            outBuf?.apply { position(info.offset); limit(info.offset + info.size); get(outBytes) }
                             if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
                                 avcConfig = outBytes
                                 Log.i(TAG, "Saved AVC config size=${outBytes.size}")
                             } else {
                                 val ptsUs = getStreamRelativeTimeUs()
-                                if (!frameQueue.offer(TimedFrame(outBytes, ptsUs))) {
+                                val frame = TimedFrame(outBytes, ptsUs, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
+                                if (!frameQueue.offer(frame)) {
                                     // queue is full: drop the oldest frame to keep latest
                                     frameQueue.poll()
-                                    if (!frameQueue.offer(TimedFrame(outBytes, ptsUs))) {
+                                    if (!frameQueue.offer(frame)) {
                                         // if still failing, count drops for diagnostics
                                         encoderDroppedFrames++
                                         if (encoderDroppedFrames % 50 == 0) {
@@ -1057,6 +1065,14 @@ class StreamService : LifecycleService() {
                             try {
                                 val outFmt = codec.outputFormat
                                 Log.i(TAG, "Encoder output format changed: $outFmt")
+                                val configParts = (0..2).mapNotNull { index ->
+                                    outFmt.getByteBuffer("csd-$index")?.duplicate()?.let { buffer ->
+                                        ByteArray(buffer.remaining()).also { buffer.get(it) }
+                                    }
+                                }
+                                if (configParts.isNotEmpty()) {
+                                    avcConfig = configParts.fold(ByteArray(0)) { acc, part -> acc + part }
+                                }
                             } catch (e: Exception) {
                                 Log.i(TAG, "Encoder output format changed")
                             }
@@ -1155,22 +1171,32 @@ class StreamService : LifecycleService() {
                 val intervalMs = if (targetFps > 0) (1000L / targetFps) else 40L
                 val pollTimeoutMs = intervalMs
                 try {
-                    val isAvcClient = requestedFormat.startsWith("avc")
-                    // if client requested AVC and we have codec config, send config packet first
-                    val config = avcConfig
-                    if (isAvcClient && config != null) {
-                        out.writeStreamPacket(-1L, config)
-                        Log.i(TAG, "Sent AVC config to client ${client.inetAddress}")
-                        // request a keyframe so the new client can start decoding immediately
-                        try {
-                            val params = android.os.Bundle()
-                            params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
-                            encoder?.setParameters(params)
-                        } catch (_: Exception) {}
+                    val isAvcClient = requestedFormat.startsWith("avc") || requestedFormat.startsWith("hevc")
+                    val matches = when {
+                        requestedFormat.startsWith("hevc") -> useAvc && useHevc
+                        requestedFormat.startsWith("avc") -> useAvc && !useHevc
+                        requestedFormat.startsWith("jpg") || requestedFormat.startsWith("mjpg") -> !useAvc
+                        else -> false
                     }
-
+                    if (!matches) return
+                    var configSent = !isAvcClient
+                    var waitingForKeyFrame = isAvcClient
                     val frameLimiter = FrameRateLimiter(targetFps)
                     while (running && !client.isClosed && client.isConnected) {
+                        if (!configSent) {
+                            val config = avcConfig
+                            if (config == null || config.isEmpty()) {
+                                Thread.sleep(10)
+                                continue
+                            }
+                            out.writeStreamPacket(-1L, config)
+                            configSent = true
+                            try {
+                                val params = android.os.Bundle()
+                                params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                                encoder?.setParameters(params)
+                            } catch (_: Exception) {}
+                        }
                         val frame = try {
                             frameQueue.poll(pollTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
                         } catch (ie: InterruptedException) {
@@ -1179,6 +1205,11 @@ class StreamService : LifecycleService() {
 
                         if (frame == null) {
                             continue
+                        }
+
+                        if (waitingForKeyFrame) {
+                            if (!frame.keyFrame) continue
+                            waitingForKeyFrame = false
                         }
 
                         // For AVC every encoded frame is part of the bitstream and must be sent —
@@ -1403,6 +1434,15 @@ class StreamService : LifecycleService() {
         val fpsLimits = FrameRateCapabilities.limits(checkNotNull(cameraManager), selectedCamera, reqWidth, reqHeight, true)
         highSpeedCameraSession = fpsLimits.needsHighSpeed(targetFps)
 
+        if (useHdr) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                throw IllegalStateException("HDR requires Android 13")
+            }
+            val chars = cameraManager!!.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
+            val profiles = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
+            check(profiles?.supportedProfiles?.contains(android.hardware.camera2.params.DynamicRangeProfiles.HLG10) == true) { "Camera does not support HLG10" }
+        }
+
         // determine a supported output size for the camera for encoder surface
         var chosenWidth = reqWidth
         var chosenHeight = reqHeight
@@ -1499,6 +1539,7 @@ class StreamService : LifecycleService() {
                 setupEncoder(reqWidth, reqHeight, fps)
             }
         } catch (e: Exception) {
+            if (useHdr) throw e
             Log.w(TAG, "Could not query supported sizes, using requested size", e)
             setupEncoder(reqWidth, reqHeight, fps)
         }
@@ -1521,7 +1562,7 @@ class StreamService : LifecycleService() {
                         // create an ImageReader as an additional consumer so some devices
                         // will happily start streaming into the encoder surface
                         val targets = mutableListOf(surface)
-                        if (!highSpeedCameraSession) {
+                        if (!highSpeedCameraSession && !useHdr) {
                         val ir = imageReader ?: android.media.ImageReader.newInstance(
                             chosenWidth.takeIf { it>0 } ?: 1280,
                             chosenHeight.takeIf { it>0 } ?: 720,
@@ -1536,7 +1577,7 @@ class StreamService : LifecycleService() {
                         }, cameraHandler)
                         targets.add(ir.surface)
                         }
-                        cameraStateHolder.previewSurface?.let { targets.add(it) }
+                        if (!useHdr) cameraStateHolder.previewSurface?.let { targets.add(it) }
 
                         val sessionCb = object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(session: CameraCaptureSession) {
@@ -1764,6 +1805,8 @@ class StreamService : LifecycleService() {
                 putExtra("jpegQuality", jpegQuality)
                 putExtra("targetFps", adjustedFps)
                 putExtra("useAvc", useAvc)
+                putExtra("useHevc", useHevc)
+                putExtra("useHdr", useHdr)
                 putExtra("preservePreview", true)
                 avcBitrateUser?.let { putExtra("avcBitrate", it) }
             }
@@ -1917,6 +1960,9 @@ class StreamService : LifecycleService() {
     private fun physicalOutput(surface: Surface): android.hardware.camera2.params.OutputConfiguration =
         android.hardware.camera2.params.OutputConfiguration(surface).apply {
             PhysicalLens.parse(selectedCamera)?.second?.let { setPhysicalCameraId(it) }
+            if (useHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && surface == encoderInputSurface) {
+                setDynamicRangeProfile(android.hardware.camera2.params.DynamicRangeProfiles.HLG10)
+            }
         }
 
     private fun stopAfterStreamFailure(message: String) {
@@ -1952,6 +1998,7 @@ class StreamService : LifecycleService() {
     }
 
     private fun reconfigureCamera2Session() {
+        if (useHdr) return // HDR uses only the encoder surface.
         val session = captureSession ?: return
         val camera = cameraDevice ?: return
         

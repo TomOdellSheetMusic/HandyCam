@@ -56,6 +56,7 @@ class MainViewModel @Inject constructor(
             streamStateHolder.setJpegQuality(config.jpegQuality)
             streamStateHolder.setFps(config.fps)
             streamStateHolder.setUseAvc(config.useAvc)
+            streamStateHolder.setUseHevc(config.useHevc)
             streamStateHolder.setAvcBitrate(config.avcBitrate ?: -1)
         }
     }
@@ -75,7 +76,7 @@ class MainViewModel @Inject constructor(
         mediaProjectionData: android.content.Intent? = null
     ) {
         viewModelScope.launch {
-            val config = StreamConfig(width, height, camera, jpegQuality, fps, useAvc, avcBitrate)
+            val config = StreamConfig(width, height, camera, jpegQuality, fps, useAvc, avcBitrate, streamStateHolder.useHevc.value)
             try {
                 preferences.updateHost(host)
                 preferences.updateStreamingPort(port)
@@ -96,6 +97,8 @@ class MainViewModel @Inject constructor(
                 putExtra("jpegQuality", jpegQuality)
                 putExtra("targetFps", fps)
                 putExtra("useAvc", useAvc)
+                putExtra("useHevc", streamStateHolder.useHevc.value)
+                putExtra("useHdr", streamStateHolder.useHdr.value)
                 avcBitrate?.let { putExtra("avcBitrate", it) }
                 putExtra("useScreenCapture", useScreenCapture)
                 if (useScreenCapture) {
@@ -154,6 +157,11 @@ class MainViewModel @Inject constructor(
     fun updateUseAvc(useAvc: Boolean) {
         streamStateHolder.setUseAvc(useAvc)
         viewModelScope.launch { preferences.updateUseAvc(useAvc) }
+    }
+
+    fun updateUseHevc(value: Boolean) {
+        streamStateHolder.setUseHevc(value)
+        viewModelScope.launch { preferences.updateUseHevc(value) }
     }
 
     fun updateAvcBitrate(bitrate: Int?) {

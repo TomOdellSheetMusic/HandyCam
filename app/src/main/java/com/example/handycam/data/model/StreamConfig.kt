@@ -10,6 +10,7 @@ data class StreamConfig(
     val camera: String = "back",
     val jpegQuality: Int = 85,
     val fps: Int = 30,
-    val useAvc: Boolean = false,
-    val avcBitrate: Int? = null
+    val useAvc: Boolean = true,
+    val avcBitrate: Int? = null,
+    val useHevc: Boolean = false
 )
