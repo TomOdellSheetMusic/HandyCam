@@ -1469,40 +1469,7 @@ class StreamService : LifecycleService() {
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest, preserving aspect ratio
-                    var chosen = sizes[0]
-                    val targetAspectRatio = nativeReqWidth.toFloat() / nativeReqHeight.toFloat()
-                    var bestAspectRatioDiff = Float.MAX_VALUE
-                    var bestAreaDiff = Int.MAX_VALUE
-
-                    for (s in sizes) {
-                        // Exact match is always best
-                        if (s.width == nativeReqWidth && s.height == nativeReqHeight) {
-                            chosen = s
-                            break
-                        }
-
-                        val aspectRatio = s.width.toFloat() / s.height.toFloat()
-                        val aspectRatioDiff = Math.abs(aspectRatio - targetAspectRatio)
-
-                        // If aspect ratio is a very close match, consider it.
-                        // Then, from the matching aspect ratios, pick the one with the smallest area difference.
-                        if (aspectRatioDiff < 0.02f) {
-                            val areaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                            if (areaDiff < bestAreaDiff) {
-                                bestAreaDiff = areaDiff
-                                bestAspectRatioDiff = aspectRatioDiff
-                                chosen = s
-                            }
-                        } else if (aspectRatioDiff < bestAspectRatioDiff && bestAreaDiff > 200000) {
-                            // If no close aspect ratio has been found yet, and this one is better, take it.
-                            // The area diff check is to avoid picking a much smaller resolution just because
-                            // the aspect ratio is slightly better.
-                            bestAspectRatioDiff = aspectRatioDiff
-                            bestAreaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                            chosen = s
-                        }
-                    }
+                    val chosen = checkNotNull(FrameRateCapabilities.selectOutputSize(sizes.toList(), nativeReqWidth, nativeReqHeight))
                     chosenWidth = chosen.width
                     chosenHeight = chosen.height
                     cameraStateHolder.setEncoderSize(chosenWidth, chosenHeight)
@@ -1542,10 +1509,6 @@ class StreamService : LifecycleService() {
             if (useHdr) throw e
             Log.w(TAG, "Could not query supported sizes, using requested size", e)
             setupEncoder(reqWidth, reqHeight, fps)
-        }
-
-        if (highSpeedCameraSession && (chosenWidth != maxOf(reqWidth, reqHeight) || chosenHeight != minOf(reqWidth, reqHeight))) {
-            throw IllegalStateException("Requested high-speed resolution is unavailable")
         }
 
         try {
@@ -1696,7 +1659,7 @@ class StreamService : LifecycleService() {
 
     private fun highFrameRateRange(cameraId: String): android.util.Range<Int>? {
         if (highSpeedCameraSession) {
-            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, requestedWidth, requestedHeight, targetFps)
+            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, encoderWidth, encoderHeight, targetFps)
         }
         val ranges = cameraManager?.getCameraCharacteristics(cameraId)
             ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList() ?: return null
