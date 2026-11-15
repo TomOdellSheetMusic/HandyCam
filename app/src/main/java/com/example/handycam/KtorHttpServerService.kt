@@ -498,8 +498,10 @@ class KtorHttpServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val bitrate = params["bitrate"] ?: -1
+                    require(bitrate == -1 || bitrate > 0) { "Bitrate must be positive or automatic" }
+                    preferences.updateAvcBitrate(bitrate.takeIf { it > 0 })
                     streamStateHolder.setAvcBitrate(bitrate)
-                    call.respond(ApiResponse(true, "AVC bitrate set to $bitrate"))
+                    call.respond(ApiResponse(true, if (bitrate > 0) "Bitrate updated" else "Bitrate set to auto"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid avc bitrate: ${e.message}"))
                 }
