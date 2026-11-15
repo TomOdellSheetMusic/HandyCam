@@ -30,20 +30,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # REQUIRED — You accidentally deleted this
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
-      # Your Android build step
       - name: Run manual build steps
         if: matrix.build-mode == 'manual'
         shell: bash
         run: |
           chmod +x ./gradlew
-          ./gradlew clean assembleDebug
+          ./gradlew --no-daemon clean :app:assembleDebug
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
