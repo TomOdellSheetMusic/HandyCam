@@ -1435,7 +1435,9 @@ class StreamService : LifecycleService() {
         highSpeedCameraSession = fpsLimits.needsHighSpeed(targetFps)
 
         if (useHdr) {
-            check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { "HDR requires Android 13" }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                throw IllegalStateException("HDR requires Android 13")
+            }
             val chars = cameraManager!!.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
             val profiles = chars.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
             check(profiles?.supportedProfiles?.contains(android.hardware.camera2.params.DynamicRangeProfiles.HLG10) == true) { "Camera does not support HLG10" }
