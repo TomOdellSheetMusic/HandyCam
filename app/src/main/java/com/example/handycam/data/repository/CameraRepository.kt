@@ -3,6 +3,7 @@ package com.example.handycam.data.repository
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import com.example.handycam.FrameRateCapabilities
 import com.example.handycam.data.model.CameraInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -19,6 +20,9 @@ class CameraRepository @Inject constructor(
     private val cameraManager: CameraManager by lazy {
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     }
+
+    fun maxStreamingFps(camera: String, width: Int, height: Int, avc: Boolean): Int =
+        FrameRateCapabilities.maxStreamingFps(cameraManager, camera, width, height, avc)
 
     /**
      * Get list of all available cameras with their metadata.
@@ -63,62 +67,4 @@ class CameraRepository @Inject constructor(
         }
     }
 
-    /**
-     * Find camera ID by facing direction or logical name.
-     * Supports "back", "front", or specific camera IDs.
-     */
-    fun findCameraId(cameraSelector: String): String? {
-        return try {
-            when (cameraSelector.lowercase()) {
-                "back" -> {
-                    cameraManager.cameraIdList.firstOrNull { id ->
-                        val characteristics = cameraManager.getCameraCharacteristics(id)
-                        characteristics.get(CameraCharacteristics.LENS_FACING) == 
-                            CameraCharacteristics.LENS_FACING_BACK
-                    }
-                }
-                "front" -> {
-                    cameraManager.cameraIdList.firstOrNull { id ->
-                        val characteristics = cameraManager.getCameraCharacteristics(id)
-                        characteristics.get(CameraCharacteristics.LENS_FACING) == 
-                            CameraCharacteristics.LENS_FACING_FRONT
-                    }
-                }
-                else -> {
-                    // Check if it's a valid camera ID
-                    if (cameraManager.cameraIdList.contains(cameraSelector)) {
-                        cameraSelector
-                    } else {
-                        null
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Check if camera supports torch/flash.
-     */
-    fun isTorchAvailable(cameraId: String): Boolean {
-        return try {
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Enable or disable torch for a specific camera.
-     */
-    fun setTorchMode(cameraId: String, enabled: Boolean): Result<Unit> {
-        return try {
-            cameraManager.setTorchMode(cameraId, enabled)
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
 }

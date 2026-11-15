@@ -21,16 +21,26 @@ data class CameraStatusResponse(
     val streaming: Boolean,
     val port: Int,
     val camera: String,
+    val cameraSwitchStatus: String,
+    val requestedCamera: String,
     val width: Int,
     val height: Int,
     val fps: Int,
+    val maxFps: Int,
     val jpegQuality: Int,
     val useAvc: Boolean,
     val zoom: Float,
+    val zoomRatio: Float,
+    val minZoomRatio: Float,
+    val maxZoomRatio: Float,
     val zoomLocked: Boolean,
     val torchEnabled: Boolean,
     val autoFocus: Boolean,
+    val autoExposure: Boolean,
     val exposure: Int,
+    val exposureMin: Int,
+    val exposureMax: Int,
+    val exposureStep: Float,
     val avcBitrate: Int
 )
 
@@ -39,5 +49,6 @@ data class CameraListItem(
     val id: String,
     val label: String,
     val facing: String,
-    val focalDesc: String
+    val focalDesc: String,
+    val sensorId: String = ""
 )

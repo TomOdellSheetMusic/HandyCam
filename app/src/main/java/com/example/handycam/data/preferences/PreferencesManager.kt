@@ -39,10 +39,7 @@ class PreferencesManager(private val context: Context) {
         val HTTPS_RUNNING = booleanPreferencesKey("https_running")
     }
 
-    /**
-     * Flow of app settings that emits whenever any setting changes.
-     */
-    val appSettingsFlow: Flow<AppSettings> = dataStore.data
+    private val preferencesFlow = dataStore.data
         .catch { exception ->
             if (exception is IOException) {
                 emit(emptyPreferences())
@@ -50,6 +47,8 @@ class PreferencesManager(private val context: Context) {
                 throw exception
             }
         }
+
+    val appSettingsFlow: Flow<AppSettings> = preferencesFlow
         .map { preferences ->
             AppSettings(
                 host = preferences[PreferenceKeys.HOST] ?: "0.0.0.0",
@@ -60,17 +59,7 @@ class PreferencesManager(private val context: Context) {
             )
         }
 
-    /**
-     * Flow of stream configuration that emits whenever any stream setting changes.
-     */
-    val streamConfigFlow: Flow<StreamConfig> = dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
-            }
-        }
+    val streamConfigFlow: Flow<StreamConfig> = preferencesFlow
         .map { preferences ->
             StreamConfig(
                 width = preferences[PreferenceKeys.WIDTH] ?: 1920,

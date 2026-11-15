@@ -30,7 +30,6 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.InetSocketAddress
 import java.net.BindException
-import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import android.media.MediaCodec
@@ -60,10 +59,6 @@ import android.media.AudioPlaybackCaptureConfiguration
 private const val TAG = "StreamService"
 private const val CHANNEL_ID = "handycam_stream"
 private const val NOTIF_ID = 1001
-private const val ACTION_START = "com.example.handycam.ACTION_START"
-private const val ACTION_STOP = "com.example.handycam.ACTION_STOP"
-private const val ACTION_SET_CAMERA = "com.example.handycam.ACTION_SET_CAMERA"
-private const val ACTION_SET_PREVIEW_SURFACE = "com.example.handycam.ACTION_SET_PREVIEW_SURFACE"
 
 @dagger.hilt.android.AndroidEntryPoint
 class StreamService : LifecycleService() {
@@ -80,8 +75,10 @@ class StreamService : LifecycleService() {
 
     // runtime options filled from Intent extras
     private var selectedCamera: String = "back"
+    private var cameraBeforeSwitch: String? = null
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
+    private var highSpeedCameraSession = false
     private var useAvc: Boolean = false
     private var requestedWidth: Int = 1280
     private var requestedHeight: Int = 720
@@ -131,6 +128,8 @@ class StreamService : LifecycleService() {
 
     private var streamStartTime: Long = -1
 
+    // DroidCam/OBS expects stream-relative microseconds for both audio and video.
+    // Keep packet timestamps independent from the MJPEG send-rate limiter.
     private fun getStreamRelativeTimeUs(): Long {
         val now = android.os.SystemClock.elapsedRealtimeNanos() / 1000L
         if (streamStartTime == -1L) {
@@ -207,7 +206,17 @@ class StreamService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_START -> {
+            StreamActions.START -> {
+                // Reconfigure in one service command so stopSelf cannot race a new start.
+                if (running) {
+                    val preservePreview = intent.getBooleanExtra("preservePreview", false)
+                    val surface = if (preservePreview) cameraStateHolder.previewSurface?.takeIf { it.isValid } else null
+                    val provider = if (preservePreview) cameraStateHolder.previewSurfaceProvider else null
+                    unregisterMdns()
+                    stopStreaming(keepStreamingState = preservePreview)
+                    cameraStateHolder.previewSurface = surface
+                    cameraStateHolder.previewSurfaceProvider = provider
+                }
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val streamingPort = intent.getIntExtra("streamingPort", 4747)
                 val width = intent.getIntExtra("width", 1080)
@@ -216,9 +225,15 @@ class StreamService : LifecycleService() {
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
                 useAvc = intent.getBooleanExtra("useAvc", false)
+                setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
                 useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                val maxFps = if (useScreenCapture) 60 else FrameRateCapabilities.maxStreamingFps(
+                    getSystemService(Context.CAMERA_SERVICE) as CameraManager,
+                    selectedCamera, width, height, useAvc
+                )
+                targetFps = FrameRateCapabilities.clampTarget(targetFps, maxFps)
                 val mpResultCode = intent.getIntExtra("mediaProjectionResultCode", 0)
                 @Suppress("DEPRECATION")
                 val mpData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -230,6 +245,7 @@ class StreamService : LifecycleService() {
                 // Update state holder
                 streamStateHolder.setStreaming(true)
                 streamStateHolder.setCamera(selectedCamera)
+                streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreamingPort(streamingPort)
                 streamStateHolder.setWidth(width)
                 streamStateHolder.setHeight(height)
@@ -267,11 +283,21 @@ class StreamService : LifecycleService() {
                     }
                 } catch (se: SecurityException) {
                     Log.e(TAG, "Unable to start foreground service: missing permission", se)
+                    notifyStreamingState(false)
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startStreaming(host, streamingPort, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
-                    useScreenCapture, mpResultCode, mpData)
+                try {
+                    startStreaming(host, streamingPort, width, height, selectedCamera, jpegQuality, targetFps, useAvc,
+                        useScreenCapture, mpResultCode, mpData)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unable to start streaming", e)
+                    stopStreaming()
+                    android.widget.Toast.makeText(this, "Unable to start streaming. Check permissions and settings.", android.widget.Toast.LENGTH_LONG).show()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 registerMdns(streamingPort)
                 // notify UI and persist state that streaming started
                 try {
@@ -280,12 +306,11 @@ class StreamService : LifecycleService() {
                     prefs.edit().putBoolean("isStreaming", true).apply()
                 } catch (_: Exception) {}
             }
-            ACTION_SET_CAMERA -> {
+            StreamActions.SET_CAMERA -> {
                 val newCam = intent.getStringExtra("camera") ?: ""
                 if (newCam.isNotBlank()) {
                     Log.i(TAG, "Received camera switch request -> $newCam")
-                    streamStateHolder.setCamera(newCam)
-                    // perform camera switch while streaming
+                    // The public selection changes only when the new camera is ready.
                     try {
                         handleCameraSwitchRequest(newCam)
                     } catch (e: Exception) {
@@ -293,12 +318,14 @@ class StreamService : LifecycleService() {
                     }
                 }
             }
-            ACTION_SET_PREVIEW_SURFACE -> {
+            StreamActions.SET_PREVIEW_SURFACE -> {
                 val surfaceToken = intent.getStringExtra("surfaceToken")
                 Log.i(TAG, "Received preview surface update: $surfaceToken")
                 handlePreviewSurfaceUpdate(surfaceToken)
             }
-            ACTION_STOP -> {
+            StreamActions.STOP -> {
+                cameraBeforeSwitch = null
+                streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreaming(false)
                 unregisterMdns()
                 stopStreaming()
@@ -335,7 +362,7 @@ class StreamService : LifecycleService() {
         )
 
         // stop action: sends ACTION_STOP to the service
-        val stopIntent = Intent(this, StreamService::class.java).apply { action = ACTION_STOP }
+        val stopIntent = Intent(this, StreamService::class.java).apply { action = StreamActions.STOP }
         val stopPending = PendingIntent.getService(
             this,
             1,
@@ -386,6 +413,7 @@ class StreamService : LifecycleService() {
             val b = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             sessionSurfaces.forEach { b.addTarget(it) }
             b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+            highFrameRateRange(cam.id)?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             // Flash / torch
             val flashMode = if (streamStateHolder.torchEnabled.value)
@@ -408,7 +436,7 @@ class StreamService : LifecycleService() {
             // Zoom
             val zoom = streamStateHolder.zoom.value
             try {
-                val chars = cameraManager?.getCameraCharacteristics(cameraDevice!!.id)
+                val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: cameraDevice!!.id)
                 val zoomRange = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                     chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 } else {
@@ -453,7 +481,7 @@ class StreamService : LifecycleService() {
             val session = captureSession ?: return@post
             val req = buildCamera2Request(cam) ?: return@post
             try {
-                session.setRepeatingRequest(req, null, cameraHandler)
+                submitRepeating(session, req)
             } catch (e: Exception) {
                 Log.e(TAG, "setRepeatingRequest failed", e)
             }
@@ -515,7 +543,8 @@ class StreamService : LifecycleService() {
                         val fd = if (value <= 0) 0.0f else (1.0f.coerceAtMost(value / 100.0f))
                         b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                         b.set(CaptureRequest.LENS_FOCUS_DISTANCE, fd)
-                        session.setRepeatingRequest(b.build(), null, cameraHandler)
+                        highFrameRateRange(cam.id)?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                        submitRepeating(session, b.build())
                         Log.i(TAG, "Applied focus via Camera2: slider=$value -> distance=$fd")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to apply focus on Camera2", e)
@@ -552,6 +581,7 @@ class StreamService : LifecycleService() {
         }
     }
 
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
     private fun applyWhiteBalance(mode: Int) {
         try {
             if (!useAvc) {
@@ -614,23 +644,16 @@ class StreamService : LifecycleService() {
         jpegQuality = jpegQ
         targetFps = fps
         useAvc = useAvcFlag
+        highSpeedCameraSession = false
         useScreenCapture = screenCapture
 
         if (useScreenCapture) {
             if (useAvc) {
-                try {
-                    setupEncoder(w, h, targetFps)
-                    startEncoderOutputReader()
-                    startScreenCaptureAvc(mpResultCode, mpData!!)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start screen capture AVC pipeline", e)
-                }
+                setupEncoder(w, h, targetFps)
+                startEncoderOutputReader()
+                startScreenCaptureAvc(mpResultCode, requireNotNull(mpData))
             } else {
-                try {
-                    startScreenCaptureMjpeg(mpResultCode, mpData!!, w, h)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start screen capture MJPEG pipeline", e)
-                }
+                startScreenCaptureMjpeg(mpResultCode, requireNotNull(mpData), w, h)
             }
         } else if (useAvc) {
             // Start Camera2 -> encoder pipeline. The helper will pick a supported
@@ -640,90 +663,113 @@ class StreamService : LifecycleService() {
                 startEncoderOutputReader()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize encoder or camera2 pipeline", e)
-                // fallback to MJPEG if AVC init fails
-                useAvc = false
-                stopCamera2()
+                throw e
             }
         } else {
-            // Start CameraX analysis to capture frames (MJPEG path)
-            // Initialize camera manager early so findCameraId and buildCameraSelectorForId can work
-            try {
-                if (cameraManager == null) {
-                    cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to get CameraManager for MJPEG path", e)
-            }
-            
-            lifecycleScope.launch(Dispatchers.Main) {
-                val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
-                val cameraProvider = cameraProviderFuture.get()
-                // keep reference so we can rebind while streaming
-                this@StreamService.cameraProvider = cameraProvider
-
-                val analysisUseCase = ImageAnalysis.Builder()
-                    // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
-                    // space regardless of phone orientation — ensures consistent landscape output
-                    .setTargetRotation(android.view.Surface.ROTATION_90)
-                    // Request an explicit target resolution. Using ResolutionSelector can
-                    // cause CameraX to pick an unexpected fallback (sometimes square).
-                    // setTargetResolution requests the desired Size directly which keeps
-                    // aspect ratio and avoids selecting strange square fallbacks.
-                    .setTargetResolution(android.util.Size(w, h))
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-
-                cameraExecutor = Executors.newSingleThreadExecutor()
-                analysisUseCase.setAnalyzer(cameraExecutor!!) { image ->
-                    // compress on the camera executor to avoid blocking UI
-                    handleImageProxy(image)
-                }
-                // keep reference so switch can rebind
-                this@StreamService.analysisUseCase = analysisUseCase
-                
-                // Create preview use case if surface provider is available
-                if (cameraStateHolder.previewSurfaceProvider != null) {
-                    previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
-                        setSurfaceProvider(cameraStateHolder.previewSurfaceProvider)
-                    }
-                }
-
-                try {
-                    cameraProvider.unbindAll()
-                    
-                    // Try to use the physical camera ID if available (for focal lengths)
-                    val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
-                    
-                    val selector = if (physicalCameraId != null) {
-                        // Use custom selector for specific physical camera (includes focal length variants)
-                        buildCameraSelectorForId(physicalCameraId) ?: 
-                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
-                    } else {
-                        // Fallback to front/back if no physical ID found
-                        if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-                    }
-                    
-                    val useCases = mutableListOf<androidx.camera.core.UseCase>(analysisUseCase)
-                    previewUseCase?.let { useCases.add(it) }
-                    
-                    val camera = cameraProvider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
-                    
-                    // Store camera control for preview activity
-                    cameraStateHolder.cameraControl = camera.cameraControl
-                    cameraStateHolder.cameraInfo = camera.cameraInfo
-                    
-                    Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
-                    
-                    // Notify that camera is ready
-                        sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to bind camera use cases in service", e)
-                }
-            }
+            startCameraX(w, h)
         }
 
         startAudio()
 
+        startSocketServer(bindHost, port)
+    }
+
+
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun startCameraX(width: Int, height: Int) {
+        // Start CameraX analysis to capture frames (MJPEG path)
+        // Initialize camera manager early so findCameraId and buildCameraSelectorForId can work
+        try {
+            if (cameraManager == null) {
+                cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get CameraManager for MJPEG path", e)
+        }
+
+        lifecycleScope.launch(Dispatchers.Main) {
+            try {
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(this@StreamService)
+            val cameraProvider = cameraProviderFuture.get()
+            if (!running) return@launch
+            // keep reference so we can rebind while streaming
+            this@StreamService.cameraProvider = cameraProvider
+
+            val analysisBuilder = ImageAnalysis.Builder()
+                // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
+                // space regardless of phone orientation — ensures consistent landscape output
+                .setTargetRotation(android.view.Surface.ROTATION_90)
+                // Request an explicit target resolution. Using ResolutionSelector can
+                // cause CameraX to pick an unexpected fallback (sometimes square).
+                // setTargetResolution requests the desired Size directly which keeps
+                // aspect ratio and avoids selecting strange square fallbacks.
+                .setTargetResolution(android.util.Size(width, height))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            val cameraId = findCameraId(selectedCamera)
+            val highRange = cameraId?.let { highFrameRateRange(it) }
+            if (highRange != null) {
+                androidx.camera.camera2.interop.Camera2Interop.Extender(analysisBuilder)
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, highRange)
+            }
+            val analysisUseCase = analysisBuilder.build()
+
+            cameraExecutor = Executors.newSingleThreadExecutor()
+            analysisUseCase.setAnalyzer(cameraExecutor!!) { image ->
+                // compress on the camera executor to avoid blocking UI
+                handleImageProxy(image)
+            }
+            // keep reference so switch can rebind
+            this@StreamService.analysisUseCase = analysisUseCase
+
+            // Create preview use case if surface provider is available
+            if (cameraStateHolder.previewSurfaceProvider != null) {
+                previewUseCase = androidx.camera.core.Preview.Builder().build().apply {
+                    setSurfaceProvider(cameraStateHolder.previewSurfaceProvider)
+                }
+            }
+
+            try {
+                cameraProvider.unbindAll()
+
+                // Try to use the physical camera ID if available (for focal lengths)
+                val physicalCameraId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
+
+                val selector = if (physicalCameraId != null) {
+                    // Use custom selector for specific physical camera (includes focal length variants)
+                    buildCameraSelectorForId(physicalCameraId, PhysicalLens.parse(selectedCamera)?.second)
+                        ?: throw IllegalStateException("Camera selector unavailable")
+                } else {
+                    // Fallback to front/back if no physical ID found
+                    if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                }
+
+                val useCases = mutableListOf<androidx.camera.core.UseCase>(analysisUseCase)
+                previewUseCase?.let { useCases.add(it) }
+
+                val camera = cameraProvider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
+
+                // Store camera control for preview activity
+                cameraStateHolder.cameraControl = camera.cameraControl
+                cameraStateHolder.cameraInfo = camera.cameraInfo
+                camera.cameraControl.setLinearZoom(streamStateHolder.zoom.value)
+                camera.cameraControl.enableTorch(streamStateHolder.torchEnabled.value)
+
+                Log.i(TAG, "Camera bound in service (MJPEG): $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
+
+                // Notify that camera is ready
+                sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to bind camera use cases in service", e)
+                stopAfterStreamFailure("Could not start the selected camera")
+            }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize CameraX", e)
+                stopAfterStreamFailure("Could not initialize the camera")
+            }
+        }
+    }
+
+    private fun startSocketServer(bindHost: String, port: Int) {
         // Start server thread
         serverThread = Thread {
             try {
@@ -737,7 +783,7 @@ class StreamService : LifecycleService() {
                     Log.e(TAG, "Bind failed on 0.0.0.0:$port - address already in use", be)
                     server.close()
                     serverSocket = null
-                    running = false
+                    stopAfterStreamFailure("Streaming port $port is already in use")
                     return@Thread
                 }
 
@@ -764,7 +810,7 @@ class StreamService : LifecycleService() {
         serverThread?.start()
     }
 
-    private fun stopStreaming() {
+    private fun stopStreaming(keepStreamingState: Boolean = false) {
         running = false
         // stop screen capture if active
         stopScreenCapture()
@@ -807,13 +853,16 @@ class StreamService : LifecycleService() {
             Log.w(TAG, "Error closing server socket", e)
         }
         serverThread?.interrupt()
+        try { serverThread?.join(1000) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
         serverThread = null
         frameQueue.clear()
-        try {
-            notifyStreamingState(false)
-            val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("isStreaming", false).apply()
-        } catch (_: Exception) {}
+        if (!keepStreamingState) {
+            try {
+                notifyStreamingState(false)
+                val prefs = getSharedPreferences("handy_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("isStreaming", false).apply()
+            } catch (_: Exception) {}
+        }
     }
 
     // ── Screen capture helpers ──────────────────────────────────────────────
@@ -832,7 +881,7 @@ class StreamService : LifecycleService() {
             mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
                     Log.i(TAG, "MediaProjection stopped by system")
-                    if (running) stopStreaming()
+                    if (running) stopAfterStreamFailure("Screen sharing stopped")
                 }
             }, screenCaptureHandler)
         }
@@ -888,10 +937,7 @@ class StreamService : LifecycleService() {
         mediaProjection = mgr.getMediaProjection(resultCode, data)
 
         val density = resources.displayMetrics.densityDpi
-        val surface = encoderInputSurface ?: run {
-            Log.e(TAG, "Encoder input surface is null for screen capture AVC")
-            return
-        }
+        val surface = checkNotNull(encoderInputSurface) { "Encoder input surface is unavailable" }
 
         // Android 14+ requires a callback to be registered before createVirtualDisplay
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -902,7 +948,7 @@ class StreamService : LifecycleService() {
             mediaProjection!!.registerCallback(object : android.media.projection.MediaProjection.Callback() {
                 override fun onStop() {
                     Log.i(TAG, "MediaProjection stopped by system")
-                    if (running) stopStreaming()
+                    if (running) stopAfterStreamFailure("Screen sharing stopped")
                 }
             }, screenCaptureHandler!!)
         }
@@ -942,6 +988,8 @@ class StreamService : LifecycleService() {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            // KEY_FRAME_RATE describes the intended rate; surface input needs an explicit cap.
+            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.coerceAtLeast(1).toFloat())
             // Shorter I-frame interval = faster recovery from dropped/corrupt frames
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
             try {
@@ -950,7 +998,10 @@ class StreamService : LifecycleService() {
             } catch (_: Exception) {}
         }
 
-        encoder = MediaCodec.createEncoderByType(mime)
+        val encoderName = if (fps > 60) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            .findEncoderForFormat(format) else null
+        encoder = if (encoderName != null) MediaCodec.createByCodecName(encoderName)
+            else MediaCodec.createEncoderByType(mime)
         encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         // create an input surface for Camera2 to write into
         encoderInputSurface = encoder?.createInputSurface()
@@ -1047,71 +1098,9 @@ class StreamService : LifecycleService() {
             val width = image.width
             val height = image.height
 
-            val yPlane = image.planes[0]
-            val uPlane = image.planes[1]
-            val vPlane = image.planes[2]
+            val nv21 = image.toNv21()
 
-            val yBuffer = ByteArray(yPlane.buffer.remaining())
-            yPlane.buffer.get(yBuffer)
-            val uBuffer = ByteArray(uPlane.buffer.remaining())
-            uPlane.buffer.get(uBuffer)
-            val vBuffer = ByteArray(vPlane.buffer.remaining())
-            vPlane.buffer.get(vBuffer)
-
-            val nv21 = ByteArray(width * height * 3 / 2)
-            var pos = 0
-            val yRowStride = yPlane.rowStride
-            val yPixelStride = yPlane.pixelStride
-            if (yPixelStride == 1 && yRowStride == width) {
-                System.arraycopy(yBuffer, 0, nv21, 0, width * height)
-                pos = width * height
-            } else {
-                for (row in 0 until height) {
-                    val yRowStart = row * yRowStride
-                    for (col in 0 until width) {
-                        nv21[pos++] = yBuffer[yRowStart + col * yPixelStride]
-                    }
-                }
-            }
-
-            val chromaHeight = height / 2
-            val chromaWidth = width / 2
-            val uRowStride = uPlane.rowStride
-            val uPixelStride = uPlane.pixelStride
-            val vRowStride = vPlane.rowStride
-            val vPixelStride = vPlane.pixelStride
-
-            for (row in 0 until chromaHeight) {
-                val uRowStart = row * uRowStride
-                val vRowStart = row * vRowStride
-                for (col in 0 until chromaWidth) {
-                    val vIndex = vRowStart + col * vPixelStride
-                    val uIndex = uRowStart + col * uPixelStride
-                    nv21[pos++] = vBuffer[vIndex]
-                    nv21[pos++] = uBuffer[uIndex]
-                }
-            }
-
-            if (encoder != null) {
-                // convert NV21 -> NV12 (swap U/V pairs)
-                val nv12 = ByteArray(nv21.size)
-                // copy Y
-                System.arraycopy(nv21, 0, nv12, 0, width * height)
-                var p = width * height
-                while (p < nv21.size) {
-                    // NV21 is VU VU..., NV12 is UV UV...
-                    val v = nv21[p]
-                    val u = nv21[p + 1]
-                    nv12[p] = u
-                    nv12[p + 1] = v
-                    p += 2
-                }
-                // When using Surface input, we don't queue input buffers here. The encoder
-                // will be fed by Camera2. For devices that still use buffer input, the
-                // code above handled it; but with the new Camera2 surface approach we
-                // keep this branch as no-op because CameraX path won't be active when
-                // using AVC with surface input.
-            } else {
+            if (encoder == null) {
                 val baos = ByteArrayOutputStream()
                 val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
                 // use configured jpegQuality, clamp to reasonable range
@@ -1168,13 +1157,9 @@ class StreamService : LifecycleService() {
                 try {
                     val isAvcClient = requestedFormat.startsWith("avc")
                     // if client requested AVC and we have codec config, send config packet first
-                    if (isAvcClient && avcConfig != null) {
-                        val cfgHeader = ByteBuffer.allocate(12)
-                        cfgHeader.putLong(-1L)
-                        cfgHeader.putInt(avcConfig!!.size)
-                        out.write(cfgHeader.array())
-                        out.write(avcConfig)
-                        out.flush()
+                    val config = avcConfig
+                    if (isAvcClient && config != null) {
+                        out.writeStreamPacket(-1L, config)
                         Log.i(TAG, "Sent AVC config to client ${client.inetAddress}")
                         // request a keyframe so the new client can start decoding immediately
                         try {
@@ -1184,7 +1169,7 @@ class StreamService : LifecycleService() {
                         } catch (_: Exception) {}
                     }
 
-                    var lastSent = 0L
+                    val frameLimiter = FrameRateLimiter(targetFps)
                     while (running && !client.isClosed && client.isConnected) {
                         val frame = try {
                             frameQueue.poll(pollTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -1200,22 +1185,14 @@ class StreamService : LifecycleService() {
                         // skipping P-frames causes the decoder to lose reference frames → macroblocking.
                         // Only throttle for MJPEG where each frame is fully independent.
                         if (!isAvcClient) {
-                            val now = getStreamRelativeTimeUs()
-                            if (now - lastSent < intervalMs) {
+                            if (!frameLimiter.shouldSend(System.nanoTime())) {
                                 continue
                             }
                         }
 
                         val pts = frame.ptsUs
-                        val header = ByteBuffer.allocate(12)
-                        header.putLong(pts)
-                        header.putInt(frame.data.size)
-
                         try {
-                            out.write(header.array())
-                            out.write(frame.data)
-                            out.flush()
-                            lastSent = pts
+                            out.writeStreamPacket(pts, frame.data)
                         } catch (se: java.net.SocketException) {
                             Log.i(TAG, "Socket closed by peer while writing: ${se.message}")
                             break
@@ -1385,12 +1362,7 @@ class StreamService : LifecycleService() {
             }
 
             // Send config packet: PTS=NO_PTS (-1L) + config bytes
-            val cfgHeader = ByteBuffer.allocate(12)
-            cfgHeader.putLong(AUDIO_NO_PTS)
-            cfgHeader.putInt(config.size)
-            out.write(cfgHeader.array())
-            out.write(config)
-            out.flush()
+            out.writeStreamPacket(AUDIO_NO_PTS, config)
             Log.i(TAG, "Sent AAC config (${config.size}B) to audio client ${client.inetAddress}")
 
             // Stream audio frames
@@ -1400,14 +1372,8 @@ class StreamService : LifecycleService() {
                 } catch (_: InterruptedException) { null }
                 if (frame == null) continue
 
-                val pts = frame.ptsUs
-                val header = ByteBuffer.allocate(12)
-                header.putLong(pts)
-                header.putInt(frame.data.size)
                 try {
-                    out.write(header.array())
-                    out.write(frame.data)
-                    out.flush()
+                    out.writeStreamPacket(frame.ptsUs, frame.data)
                 } catch (_: java.io.IOException) {
                     break
                 }
@@ -1426,27 +1392,30 @@ class StreamService : LifecycleService() {
             cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         } catch (e: Exception) {
             Log.e(TAG, "CameraManager not available", e)
-            return
+            throw e
         }
 
         cameraHandlerThread = HandlerThread("Camera2Thread").also { it.start() }
         cameraHandler = Handler(cameraHandlerThread!!.looper)
 
         // pick camera id
-        val camId = try { findCameraId(selectedCamera) } catch (e: Exception) { null }
-        if (camId == null) {
-            Log.e(TAG, "No camera id found for selector $selectedCamera")
-            return
-        }
+        val camId = checkNotNull(findCameraId(selectedCamera)) { "No camera found for $selectedCamera" }
+        val fpsLimits = FrameRateCapabilities.limits(checkNotNull(cameraManager), selectedCamera, reqWidth, reqHeight, true)
+        highSpeedCameraSession = fpsLimits.needsHighSpeed(targetFps)
 
         // determine a supported output size for the camera for encoder surface
         var chosenWidth = reqWidth
         var chosenHeight = reqHeight
         try {
-            val chars = cameraManager?.getCameraCharacteristics(camId)
+            val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
+            cameraStateHolder.setCameraOrientation(
+                chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                chars?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            )
             val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
-                cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper)
+                val exposureStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+                cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper, exposureStep)
             } else {
                 cameraStateHolder.setExposureRange(0, 0)
             }
@@ -1534,6 +1503,10 @@ class StreamService : LifecycleService() {
             setupEncoder(reqWidth, reqHeight, fps)
         }
 
+        if (highSpeedCameraSession && (chosenWidth != maxOf(reqWidth, reqHeight) || chosenHeight != minOf(reqWidth, reqHeight))) {
+            throw IllegalStateException("Requested high-speed resolution is unavailable")
+        }
+
         try {
             cameraManager?.openCamera(camId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -1547,6 +1520,8 @@ class StreamService : LifecycleService() {
                         }
                         // create an ImageReader as an additional consumer so some devices
                         // will happily start streaming into the encoder surface
+                        val targets = mutableListOf(surface)
+                        if (!highSpeedCameraSession) {
                         val ir = imageReader ?: android.media.ImageReader.newInstance(
                             chosenWidth.takeIf { it>0 } ?: 1280,
                             chosenHeight.takeIf { it>0 } ?: 720,
@@ -1559,8 +1534,8 @@ class StreamService : LifecycleService() {
                             val img = try { reader.acquireLatestImage() } catch (e: Exception) { null }
                             try { img?.close() } catch (_: Exception) {}
                         }, cameraHandler)
-
-                        val targets = mutableListOf(surface, ir.surface)
+                        targets.add(ir.surface)
+                        }
                         cameraStateHolder.previewSurface?.let { targets.add(it) }
 
                         val sessionCb = object : CameraCaptureSession.StateCallback() {
@@ -1576,48 +1551,66 @@ class StreamService : LifecycleService() {
                                         reqBuilder.build()
                                     }
 
-                                    session.setRepeatingRequest(request, null, cameraHandler)
+                                    submitRepeating(session, request)
                                     Log.i(TAG, "Camera2 session configured with ${targets.size} targets")
+                                    if (cameraBeforeSwitch != null) {
+                                        streamStateHolder.setCamera(selectedCamera)
+                                        cameraBeforeSwitch = null
+                                        streamStateHolder.setCameraSwitchStatus("")
+                                    }
                                     
                                     // Notify that camera is ready
                                         sendBroadcast(Intent("com.example.handycam.CAMERA_READY").apply { setPackage(packageName) })
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to start repeating request", e)
+                                    failCamera2Switch("Failed to start selected camera")
                                 }
                             }
 
                             override fun onConfigureFailed(session: CameraCaptureSession) {
                                 Log.e(TAG, "Camera2 session configuration failed")
+                                failCamera2Switch("Selected lens does not support this stream configuration")
                             }
                         }
                         val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
-                            android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                            targets.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                            if (highSpeedCameraSession) android.hardware.camera2.params.SessionConfiguration.SESSION_HIGH_SPEED
+                            else android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                            targets.map { physicalOutput(it) },
                             java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                             sessionCb
                         )
+                        highFrameRateRange(camera.id)?.let { range ->
+                            val parameters = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                            parameters.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                            sessionConfig.setSessionParameters(parameters.build())
+                        }
                         camera.createCaptureSession(sessionConfig)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to create capture request/session", e)
+                        failCamera2Switch("Failed to configure selected lens")
                     }
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
                     Log.i(TAG, "Camera disconnected")
+                    failCamera2Switch("Camera disconnected")
                     try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     Log.e(TAG, "Camera error: $error")
+                    failCamera2Switch("Could not open selected camera ($error)")
                     try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                 }
             }, cameraHandler)
         } catch (e: SecurityException) {
             Log.e(TAG, "Camera permission missing", e)
+            failCamera2Switch("Camera permission missing")
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Camera access error", e)
+            failCamera2Switch("Camera access error")
         }
     }
 
@@ -1639,7 +1632,11 @@ class StreamService : LifecycleService() {
     }
 
     private fun findCameraId(sel: String): String? {
+        PhysicalLens.parse(sel)?.let { return it.first }
         val mgr = cameraManager ?: return null
+        if (sel != "back" && sel != "front" && sel in mgr.cameraIdList) {
+            return VirtualLens.resolve(mgr, sel).cameraId
+        }
         try {
             for (id in mgr.cameraIdList) {
                 try {
@@ -1656,7 +1653,46 @@ class StreamService : LifecycleService() {
         return null
     }
 
-    private fun buildCameraSelectorForId(cameraId: String): CameraSelector? {
+    private fun highFrameRateRange(cameraId: String): android.util.Range<Int>? {
+        if (highSpeedCameraSession) {
+            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, requestedWidth, requestedHeight, targetFps)
+        }
+        val ranges = cameraManager?.getCameraCharacteristics(cameraId)
+            ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList() ?: return null
+        return FrameRateCapabilities.selectRange(ranges, targetFps)
+    }
+
+    private fun submitRepeating(session: CameraCaptureSession, request: CaptureRequest) {
+        if (session is android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession) {
+            session.setRepeatingBurst(session.createHighSpeedRequestList(request), null, cameraHandler)
+        } else {
+            session.setRepeatingRequest(request, null, cameraHandler)
+        }
+    }
+
+    private fun setInitialLensZoom(selection: String, avc: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            streamStateHolder.setZoom(0f)
+            return
+        }
+        val zoom = try {
+            val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val lens = VirtualLens.resolve(manager, selection)
+            if (PhysicalLens.parse(selection) != null) 0f else {
+                val cameraId = if (selection == "front" || selection == "back") {
+                    val facing = if (selection == "front") CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+                    manager.cameraIdList.firstOrNull { manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == facing }
+                } else lens.cameraId
+                val range = cameraId?.let { manager.getCameraCharacteristics(it) }
+                    ?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (range == null) 0f else VirtualLens.normalizedZoom(lens.zoomRatio, range.lower, range.upper, avc)
+            }
+        } catch (_: Exception) { 0f }
+        streamStateHolder.setZoom(zoom)
+    }
+
+    @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+    private fun buildCameraSelectorForId(cameraId: String, physicalId: String? = null): CameraSelector? {
         // For CameraX 1.1+, we can use addCameraFilter to select specific physical cameras
         // by checking against Camera2 characteristics
         return try {
@@ -1670,6 +1706,7 @@ class StreamService : LifecycleService() {
             Log.i(TAG, "Building selector for camera $cameraId with facing=$targetFacing, focal lengths=$targetFocalLengths")
             
             val selectorBuilder = CameraSelector.Builder()
+            if (physicalId != null) selectorBuilder.setPhysicalCameraId(physicalId)
             
             // First, require the correct facing direction
             when (targetFacing) {
@@ -1687,17 +1724,7 @@ class StreamService : LifecycleService() {
                             return@filter true
                         }
                         
-                        // Fallback: Match if we have similar focal lengths (with small tolerance for floating point)
-                        val chars2 = mgr.getCameraCharacteristics(cameraId2)
-                        val focal2 = chars2.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            ?.take(1)
-                            ?.toList() ?: emptyList()
-                        
-                        focal2.isNotEmpty() && targetFocalLengths.any { targetFocal ->
-                            focal2.any { f2 ->
-                                kotlin.math.abs(f2 - targetFocal) < 0.1f
-                            }
-                        }
+                        false
                     } catch (e: Exception) {
                         Log.w(TAG, "Error matching camera in filter", e)
                         false
@@ -1707,24 +1734,8 @@ class StreamService : LifecycleService() {
             
             selectorBuilder.build()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to build custom CameraSelector for camera $cameraId, will use facing direction", e)
-            // Fallback to just using facing direction
-            try {
-                val mgr = cameraManager ?: return null
-                val chars = mgr.getCameraCharacteristics(cameraId)
-                val facing = chars.get(CameraCharacteristics.LENS_FACING)
-                
-                val selectorBuilder = CameraSelector.Builder()
-                when (facing) {
-                    CameraCharacteristics.LENS_FACING_FRONT -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_FRONT)
-                    CameraCharacteristics.LENS_FACING_BACK -> selectorBuilder.requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                    else -> {} // Unknown
-                }
-                selectorBuilder.build()
-            } catch (e2: Exception) {
-                Log.w(TAG, "Failed all attempts to build CameraSelector for $cameraId", e2)
-                null
-            }
+            Log.w(TAG, "Failed to build selector for camera $cameraId", e)
+            null
         }
     }
 
@@ -1732,10 +1743,42 @@ class StreamService : LifecycleService() {
         // update stored selection
         if (newCam == selectedCamera) {
             Log.i(TAG, "Camera already set to $newCam")
+            streamStateHolder.setCameraSwitchStatus("")
             return
         }
+        val maxFps = FrameRateCapabilities.maxStreamingFps(
+            getSystemService(Context.CAMERA_SERVICE) as CameraManager,
+            newCam, requestedWidth, requestedHeight, useAvc
+        )
+        val adjustedFps = FrameRateCapabilities.clampTarget(targetFps, maxFps)
+        // CameraX request options are bound to the old camera. Rebuild the stream when
+        // switching it, or whenever the new camera needs a lower frame rate.
+        if (!useAvc || adjustedFps != targetFps) {
+            val restart = Intent(this, StreamService::class.java).apply {
+                action = StreamActions.START
+                putExtra("host", streamStateHolder.host.value)
+                putExtra("streamingPort", streamStateHolder.streamingPort.value)
+                putExtra("width", requestedWidth)
+                putExtra("height", requestedHeight)
+                putExtra("camera", newCam)
+                putExtra("jpegQuality", jpegQuality)
+                putExtra("targetFps", adjustedFps)
+                putExtra("useAvc", useAvc)
+                putExtra("preservePreview", true)
+                avcBitrateUser?.let { putExtra("avcBitrate", it) }
+            }
+            try {
+                startService(restart)
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to restart stream for camera switch", e)
+                streamStateHolder.setCamera(selectedCamera)
+                streamStateHolder.setCameraSwitchStatus("Could not switch camera")
+            }
+            return
+        }
+        cameraBeforeSwitch = selectedCamera
         selectedCamera = newCam
-        streamStateHolder.setZoom(0f)
+        setInitialLensZoom(newCam, useAvc)
 
         if (useAvc) {
             // For AVC path, stop camera session but keep encoder surface, then reopen camera
@@ -1746,6 +1789,7 @@ class StreamService : LifecycleService() {
                 cameraHandler?.post { updateCamera2Request() }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to switch Camera2 camera", e)
+                failCamera2Switch("Failed to switch camera")
             }
         } else {
             // For CameraX MJPEG path, rebind the analysis use case to the new selector
@@ -1753,6 +1797,10 @@ class StreamService : LifecycleService() {
                 try {
                     val provider = cameraProvider ?: run {
                         Log.w(TAG, "CameraProvider not available when switching camera")
+                        selectedCamera = cameraBeforeSwitch ?: selectedCamera
+                        setInitialLensZoom(selectedCamera, useAvc)
+                        cameraBeforeSwitch = null
+                        streamStateHolder.setCameraSwitchStatus("Camera is not ready")
                         return@launch
                     }
                     provider.unbindAll()
@@ -1762,8 +1810,8 @@ class StreamService : LifecycleService() {
                     
                     val selector = if (physicalCameraId != null) {
                         // Use custom selector for specific physical camera (includes focal length variants)
-                        buildCameraSelectorForId(physicalCameraId) ?: 
-                        (if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
+                        buildCameraSelectorForId(physicalCameraId, PhysicalLens.parse(selectedCamera)?.second)
+                            ?: throw IllegalStateException("Camera selector unavailable")
                     } else {
                         // Fallback to front/back if no physical ID found
                         if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
@@ -1773,15 +1821,27 @@ class StreamService : LifecycleService() {
                     analysisUseCase?.let { useCases.add(it) }
                     previewUseCase?.let { useCases.add(it) }
                     
+                    if (useCases.isEmpty()) throw IllegalStateException("Camera use cases are not ready")
                     if (useCases.isNotEmpty()) {
                         val camera = provider.bindToLifecycle(this@StreamService, selector, *useCases.toTypedArray())
                         cameraStateHolder.cameraControl = camera.cameraControl
                         cameraStateHolder.cameraInfo = camera.cameraInfo
-                        try { cameraStateHolder.cameraControl?.setLinearZoom(0f) } catch (_: Exception) {}
+                        try { cameraStateHolder.cameraControl?.setLinearZoom(streamStateHolder.zoom.value) } catch (_: Exception) {}
+                        streamStateHolder.setCamera(selectedCamera)
+                        cameraBeforeSwitch = null
+                        streamStateHolder.setCameraSwitchStatus("")
                         Log.i(TAG, "Switched CameraX binding to $selectedCamera (physical: ${physicalCameraId ?: "auto"}) with ${useCases.size} use cases")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to rebind CameraX for new camera", e)
+                    val previous = cameraBeforeSwitch
+                    cameraBeforeSwitch = null
+                    if (previous != null) {
+                        selectedCamera = previous
+                        setInitialLensZoom(previous, useAvc)
+                        rebindCameraXUseCases()
+                    }
+                    streamStateHolder.setCameraSwitchStatus("Failed to select camera: ${e.message ?: "unsupported configuration"}")
                 }
             }
         }
@@ -1854,6 +1914,43 @@ class StreamService : LifecycleService() {
         }
     }
     
+    private fun physicalOutput(surface: Surface): android.hardware.camera2.params.OutputConfiguration =
+        android.hardware.camera2.params.OutputConfiguration(surface).apply {
+            PhysicalLens.parse(selectedCamera)?.second?.let { setPhysicalCameraId(it) }
+        }
+
+    private fun stopAfterStreamFailure(message: String) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            if (!running) return@launch
+            Log.e(TAG, message)
+            unregisterMdns()
+            stopStreaming()
+            android.widget.Toast.makeText(this@StreamService, message, android.widget.Toast.LENGTH_LONG).show()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun failCamera2Switch(message: String) {
+        val previous = cameraBeforeSwitch
+        if (previous == null) {
+            stopAfterStreamFailure(message)
+            return
+        }
+        cameraBeforeSwitch = null
+        selectedCamera = previous
+        setInitialLensZoom(previous, useAvc)
+        streamStateHolder.setCameraSwitchStatus(message)
+        lifecycleScope.launch(Dispatchers.Main) {
+            try {
+                stopCamera2(releaseEncoderSurface = false)
+                startCamera2ToEncoder(requestedWidth, requestedHeight, targetFps)
+            } catch (e: Exception) {
+                Log.e(TAG, "Unable to restore previous camera", e)
+            }
+        }
+    }
+
     private fun reconfigureCamera2Session() {
         val session = captureSession ?: return
         val camera = cameraDevice ?: return
@@ -1880,8 +1977,9 @@ class StreamService : LifecycleService() {
                         surfaces.forEach { builder.addTarget(it) }
                         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        highFrameRateRange(camera.id)?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                         
-                        newSession.setRepeatingRequest(builder.build(), null, cameraHandler)
+                        submitRepeating(newSession, builder.build())
                         Log.i(TAG, "Camera2 session reconfigured with ${surfaces.size} surfaces")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start repeating request after reconfigure", e)
@@ -1893,11 +1991,17 @@ class StreamService : LifecycleService() {
                 }
             }
             val reconfigSessionConfig = android.hardware.camera2.params.SessionConfiguration(
-                android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                surfaces.map { android.hardware.camera2.params.OutputConfiguration(it) },
+                if (highSpeedCameraSession) android.hardware.camera2.params.SessionConfiguration.SESSION_HIGH_SPEED
+                else android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
+                surfaces.map { physicalOutput(it) },
                 java.util.concurrent.Executor { cmd -> cameraHandler?.post(cmd) },
                 sessionCb2
             )
+            highFrameRateRange(camera.id)?.let { range ->
+                val parameters = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                parameters.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+                reconfigSessionConfig.setSessionParameters(parameters.build())
+            }
             camera.createCaptureSession(reconfigSessionConfig)
         } catch (e: Exception) {
             Log.e(TAG, "Error reconfiguring Camera2 session", e)
@@ -1909,7 +2013,9 @@ class StreamService : LifecycleService() {
             val provider = cameraProvider ?: return
             provider.unbindAll()
             
-            val selector = if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+            val id = findCameraId(selectedCamera)
+            val selector = id?.let { buildCameraSelectorForId(it, PhysicalLens.parse(selectedCamera)?.second) }
+                ?: if (selectedCamera == "front") CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
             val useCases = mutableListOf<androidx.camera.core.UseCase>()
             
             analysisUseCase?.let { useCases.add(it) }
