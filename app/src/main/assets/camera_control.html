@@ -170,6 +170,14 @@
 
         .fps-presets { display: flex; flex-wrap: wrap; gap: 8px; }
         .fps-presets button { flex: 1 1 65px; width: auto; margin: 0; }
+        .resolution-inputs { display: flex; align-items: end; gap: 10px; margin: 14px 0; }
+        .resolution-inputs label { flex: 1; min-width: 0; color: var(--muted); font-size: 0.8rem; }
+        .resolution-inputs input {
+            display: block; width: 100%; min-width: 0; margin-top: 5px;
+            padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--button); color: var(--text); font: inherit; font-size: 0.9rem;
+        }
+        .resolution-inputs span { color: var(--muted); padding-bottom: 10px; }
 
         .control-row .val-label {
             min-width: 36px;
@@ -264,6 +272,21 @@
             <div class="card-title">Camera Selection</div>
             <div id="cameraSwitchStatus" role="status"></div>
             <div class="camera-btn-row" id="cameraButtons">Loading...</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Resolution</div>
+            <div class="fps-presets" aria-label="Resolution presets">
+                <button class="btn-secondary" onclick="setResolution(1280, 720)">720p</button>
+                <button class="btn-secondary" onclick="setResolution(1920, 1080)">1080p</button>
+                <button class="btn-secondary" onclick="setResolution(3840, 2160)">4K</button>
+            </div>
+            <div class="resolution-inputs">
+                <label>Width (px)<input type="number" id="resolutionWidth" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
+                <span>×</span>
+                <label>Height (px)<input type="number" id="resolutionHeight" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
+            </div>
+            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply (restarts stream)</button>
         </div>
 
         <div class="card">
@@ -438,6 +461,10 @@
                 document.getElementById('camera').textContent = data.camera;
                 document.getElementById('resolution').textContent =
                     `${data.width}x${data.height}`;
+                if (!editingSettings.has('resolution')) {
+                    document.getElementById('resolutionWidth').value = data.width;
+                    document.getElementById('resolutionHeight').value = data.height;
+                }
                 document.getElementById('fps').textContent = data.fps;
                 document.getElementById('jpegQuality').textContent =
                     `${data.jpegQuality}%`;
@@ -649,6 +676,22 @@
                 button.disabled = false;
                 if (key === 'fps') updateFpsValidation();
             }
+        }
+
+        function setResolution(width, height) {
+            editingSettings.add('resolution');
+            document.getElementById('resolutionWidth').value = width;
+            document.getElementById('resolutionHeight').value = height;
+        }
+
+        function applyResolution() {
+            const width = Number(document.getElementById('resolutionWidth').value);
+            const height = Number(document.getElementById('resolutionHeight').value);
+            if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > 2147483647 || height > 2147483647) {
+                showMessage('Enter positive whole numbers for width and height.', false);
+                return;
+            }
+            return applySetting('/api/settings/resolution', { width, height }, 'resolution', document.getElementById('applyResolutionBtn'));
         }
 
         function applyFps() {

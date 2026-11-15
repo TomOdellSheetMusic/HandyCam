@@ -416,14 +416,21 @@ class KtorHttpServerService : LifecycleService() {
 
             post("/api/settings/resolution") {
                 try {
+                    if (streamStateHolder.isStreaming.value && streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before changing resolution"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, Int>>()
                     val width = params["width"] ?: 1080
                     val height = params["height"] ?: 1920
+                    require(width > 0 && height > 0) { "Width and height must be positive" }
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
                     val maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
                         FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, width, height, streamStateHolder.useAvc.value)
                     val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
                     val reduced = adjustedFps < streamStateHolder.fps.value
+                    preferences.updateResolution(width, height)
+                    if (reduced) preferences.updateFps(adjustedFps)
                     streamStateHolder.setWidth(width)
                     streamStateHolder.setHeight(height)
                     streamStateHolder.setFps(adjustedFps)
