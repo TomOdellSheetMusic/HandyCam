@@ -973,7 +973,6 @@ class StreamService : LifecycleService() {
         screenCaptureHandlerThread = null
         screenCaptureHandler = null
         useScreenCapture = false
-        streamStateHolder.setUseScreenCapture(false)
     }
 
       private fun setupEncoder(width: Int, height: Int, fps: Int) {
