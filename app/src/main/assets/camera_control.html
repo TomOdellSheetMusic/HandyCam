@@ -177,6 +177,10 @@
             font-weight: 500;
             font-size: 0.85rem;
         }
+        .control-row #avcValue {
+            flex: 0 0 12ch;
+            font-variant-numeric: tabular-nums;
+        }
 
         .message {
             position: fixed;
@@ -287,10 +291,11 @@
         <div class="card" id="avcGroup" style="display:none;">
             <div class="card-title">Video Bitrate</div>
             <div class="control-row">
-                <label>Bitrate (kbps)</label>
-                <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" oninput="setAvcBitrate(this.value)">
-                <span class="val-label" id="avcValue">2000</span>
+                <label for="avcSlider">Bitrate (Mbps)</label>
+                <input type="range" id="avcSlider" min="0" max="100" step="0.25" value="0" oninput="setAvcBitrate(this.value)">
+                <span class="val-label" id="avcValue">Auto</span>
             </div>
+            <div>Set to Auto to choose a bitrate based on resolution and frame rate.</div>
             <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply (restarts stream)</button>
         </div>
 
@@ -354,7 +359,7 @@
         let avcEnabled = true;
         let codecRequestInFlight = false;
         let codecLoaded = false;
-        let avcBitrate = 2000;
+        let avcBitrate = -1;
         let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
         let fpsConfiguration = null;
 
@@ -476,9 +481,11 @@
                     updateCodecButtons(!avcEnabled ? 'mjpeg' : data.useHevc ? 'hevc' : 'avc');
                 }
                 if (!editingSettings.has('avc')) {
-                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : 2000;
-                    document.getElementById('avcSlider').value = avcBitrate;
-                    document.getElementById('avcValue').textContent = avcBitrate;
+                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : -1;
+                    const slider = document.getElementById('avcSlider');
+                    slider.max = Math.max(100, Math.ceil(avcBitrate / 1000000));
+                    slider.value = avcBitrate > 0 ? avcBitrate / 1000000 : 0;
+                    document.getElementById('avcValue').textContent = avcBitrate > 0 ? `${avcBitrate / 1000000} Mbps` : 'Auto';
                 }
                 avcGroupPlaceholder = null;
                 const jpegCard = document.getElementById('jpegCard');
@@ -795,8 +802,9 @@
 
         function setAvcBitrate(b) {
             editingSettings.add('avc');
-            avcBitrate = parseInt(b);
-            document.getElementById('avcValue').textContent = avcBitrate;
+            const mbps = Number(b);
+            avcBitrate = mbps > 0 ? Math.round(mbps * 1000000) : -1;
+            document.getElementById('avcValue').textContent = mbps > 0 ? `${mbps} Mbps` : 'Auto';
         }
 
         function applyAvc() {
