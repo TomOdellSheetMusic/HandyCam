@@ -18,7 +18,10 @@ hilt = "2.51.1"
 datastore = "1.1.1"
 coroutines = "1.8.0"
 navigation = "2.8.4"
-ktor = "2.3.7"
+ktor = "2.3.13"
+# Netty is pinned via its BOM because Ktor's transitive Netty version lags behind
+# the security fixes published for the 4.1.x line.
+netty = "4.1.140.Final"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -56,6 +59,7 @@ ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
