@@ -1,19 +1,42 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-theme="dark">
 
 <head>
     <title>HandyCam Camera Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+        try {
+            document.documentElement.dataset.theme = localStorage.getItem('handycam-theme') === 'light' ? 'light' : 'dark';
+        } catch (_) {
+            document.documentElement.dataset.theme = 'dark';
+        }
+    </script>
     <style>
+        :root {
+            color-scheme: dark;
+            --background: #14171c; --surface: #20252d; --text: #edf1f7;
+            --muted: #b1bdcc; --border: #414c5b; --button: #2d3541;
+            --accent: #82b5ff; --selected: #253e5e;
+            --success-bg: #173628; --success-border: #387855; --success-text: #a1e4b9;
+            --error-bg: #412329; --error-border: #89505a; --error-text: #ffb7bd;
+        }
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --background: #f0f0f0; --surface: #fff; --text: #1a1a1a;
+            --muted: #555; --border: #ccc; --button: #fff;
+            --accent: #1a73e8; --selected: #e8f0fe;
+            --success-bg: #f0faf3; --success-border: #b0dfc0; --success-text: #1a6e37;
+            --error-bg: #fdf3f3; --error-border: #f0c0c0; --error-text: #7a2020;
+        }
         *, *::before, *::after { box-sizing: border-box; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             margin: 0;
             padding: 20px;
-            background: #f0f0f0;
+            background: var(--background);
             min-height: 100vh;
-            color: #1a1a1a;
+            color: var(--text);
         }
 
         .container {
@@ -22,8 +45,13 @@
         }
 
         header {
-            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
         }
+        #themeBtn { width: auto; margin: 0; white-space: nowrap; }
 
         header h1 {
             font-size: 1.4rem;
@@ -34,12 +62,12 @@
         header p {
             margin: 0;
             font-size: 0.85rem;
-            color: #666;
+            color: var(--muted);
         }
 
         .card {
-            background: white;
-            border: 1px solid #e0e0e0;
+            background: var(--surface);
+            border: 1px solid var(--border);
             border-radius: 8px;
             padding: 16px;
             margin-bottom: 12px;
@@ -50,7 +78,7 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: #666;
+            color: var(--muted);
             margin: 0 0 12px;
         }
 
@@ -71,9 +99,9 @@
             border-radius: 50%;
         }
 
-        .status-badge.active  { background: #f0faf3; border-color: #b0dfc0; color: #1a6e37; }
+        .status-badge.active  { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
         .status-badge.active .dot  { background: #28a745; }
-        .status-badge.inactive { background: #fdf3f3; border-color: #f0c0c0; color: #7a2020; }
+        .status-badge.inactive { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
         .status-badge.inactive .dot { background: #dc3545; }
 
         .info-grid {
@@ -83,7 +111,7 @@
             font-size: 0.875rem;
         }
 
-        .info-grid .key { color: #666; }
+        .info-grid .key { color: var(--muted); }
         .info-grid .val { font-weight: 500; }
 
         button {
@@ -105,17 +133,17 @@
 
         .btn-primary  { background: #1a73e8; color: white; }
         .btn-danger   { background: #dc3545; color: white; }
-        .btn-secondary { background: white; color: #333; border-color: #ccc; }
+        .btn-secondary { background: var(--button); color: var(--text); border-color: var(--border); }
 
         .toggle-btn {
-            background: white;
-            color: #333;
-            border-color: #ccc;
+            background: var(--button);
+            color: var(--text);
+            border-color: var(--border);
         }
         .toggle-btn.active {
-            background: #e8f0fe;
-            border-color: #1a73e8;
-            color: #1a73e8;
+            background: var(--selected);
+            border-color: var(--accent);
+            color: var(--accent);
         }
 
         .control-row {
@@ -128,12 +156,13 @@
 
         .control-row label {
             min-width: 120px;
-            color: #444;
+            color: var(--muted);
         }
 
         .control-row input[type="range"] {
             flex: 1;
-            accent-color: #1a73e8;
+            min-width: 0;
+            accent-color: var(--accent);
         }
 
         .fps-presets { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -154,8 +183,8 @@
             display: none;
         }
 
-        .message.success { background: #f0faf3; border: 1px solid #b0dfc0; color: #1a6e37; display: block; }
-        .message.error   { background: #fdf3f3; border: 1px solid #f0c0c0; color: #7a2020; display: block; }
+        .message.success { background: var(--success-bg); border: 1px solid var(--success-border); color: var(--success-text); display: block; }
+        .message.error   { background: var(--error-bg); border: 1px solid var(--error-border); color: var(--error-text); display: block; }
 
         .camera-btn-row {
             display: flex;
@@ -171,20 +200,25 @@
 
         #torchNote {
             font-size: 0.8rem;
-            color: #dc3545;
+            color: var(--error-text);
             margin-top: 4px;
             display: none;
         }
+        button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     </style>
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>HandyCam</h1>
-            <p>Camera Control</p>
+            <div>
+                <h1>HandyCam</h1>
+                <p>Camera Control</p>
+            </div>
+            <button type="button" class="btn-secondary" id="themeBtn" onclick="toggleTheme()">Light mode</button>
         </header>
 
+        <div id="message" class="message"></div>
         <div class="card">
             <div class="card-title">Status</div>
             <div id="status" class="status-badge inactive">
@@ -192,8 +226,6 @@
                 <span id="statusText">Checking...</span>
             </div>
         </div>
-
-        <div id="message" class="message"></div>
 
         <div class="card" id="info" style="display:none;">
             <div class="card-title">Stream Info</div>
@@ -285,6 +317,21 @@
     </div>
 
     <script>
+        function updateThemeButton() {
+            const dark = document.documentElement.dataset.theme !== 'light';
+            const button = document.getElementById('themeBtn');
+            button.textContent = dark ? 'Light mode' : 'Dark mode';
+            button.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+        }
+
+        function toggleTheme() {
+            const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+            document.documentElement.dataset.theme = theme;
+            try { localStorage.setItem('handycam-theme', theme); } catch (_) {}
+            updateThemeButton();
+        }
+
+        updateThemeButton();
         let streaming = false;
         let editingSettings = new Set();
         let torchEnabled = false;
