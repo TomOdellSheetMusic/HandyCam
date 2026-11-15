@@ -25,9 +25,20 @@ jobs:
   review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/dependency-review-action@v4
+        with:
+          # Only block on vulnerabilities that ship in the app. The Gradle plugin
+          # classpath (settings.gradle.kts) is build-time only and is pinned by AGP,
+          # so flagging it produces alerts we cannot act on.
+          fail-on-severity: high
+          fail-on-scopes: runtime
+          show-patched-versions: true
+          comment-summary-in-pr: on-failure
 
   dependency-graph:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

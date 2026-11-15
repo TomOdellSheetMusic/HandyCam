@@ -4,7 +4,27 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # AGP, Gradle, Kotlin and the Compose BOM are mutually constrained: AGP 9.x
+      # needs Gradle 9.6+, Gradle 9.6+ breaks AGP 8.x, Kotlin 2.4+ needs the
+      # compilerOptions DSL, and recent Compose BOMs need AGP 9.1+. Bumping them
+      # individually always produces a PR that cannot build, so they arrive together.
+      android-toolchain:
+        patterns:
+          - com.android.application
+          - com.android.tools.build:gradle
+          - gradle-wrapper
+          - org.jetbrains.kotlin*
+          - androidx.compose:compose-bom
+      # Everything else is independent and safe to merge on its own.
+      gradle-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
