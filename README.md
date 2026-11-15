@@ -5,7 +5,7 @@ The purpose of HandyCam is to allow you to use any reasonably recent smartphone 
 ## Features
 - Select any quality settings your camera supports
 - Stream low latency video to OBS
-- MJPEG, H.264 and HEVC/H.265 video, with optional HLG10 HDR camera capture on supported devices
+- H.264/AVC (default), MJPEG and HEVC/H.265 video, with optional HLG10 HDR camera capture on supported devices
 - Stream audio to OBS
 - Stream screen to OBS
 - Automatic Discovery of running HandyCam Servers in the Droidcam OBS Plugin

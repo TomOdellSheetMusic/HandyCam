@@ -79,7 +79,7 @@ class StreamService : LifecycleService() {
     private var jpegQuality: Int = 85
     private var targetFps: Int = 25
     private var highSpeedCameraSession = false
-    private var useAvc: Boolean = false
+    private var useAvc: Boolean = true
     private var useHevc: Boolean = false
     private var useHdr: Boolean = false
     private var requestedWidth: Int = 1280
@@ -226,7 +226,7 @@ class StreamService : LifecycleService() {
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
-                useAvc = intent.getBooleanExtra("useAvc", false)
+                useAvc = intent.getBooleanExtra("useAvc", true)
                 useHevc = useAvc && intent.getBooleanExtra("useHevc", false)
                 setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)

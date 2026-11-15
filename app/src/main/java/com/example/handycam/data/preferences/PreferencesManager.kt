@@ -67,7 +67,7 @@ class PreferencesManager(private val context: Context) {
                 height = preferences[PreferenceKeys.HEIGHT] ?: 1080,
                 jpegQuality = preferences[PreferenceKeys.JPEG_QUALITY] ?: 85,
                 fps = preferences[PreferenceKeys.FPS] ?: 30,
-                useAvc = preferences[PreferenceKeys.USE_AVC] ?: false,
+                useAvc = preferences[PreferenceKeys.USE_AVC] ?: true,
                 avcBitrate = preferences[PreferenceKeys.AVC_BITRATE],
                 useHevc = preferences[PreferenceKeys.USE_HEVC] ?: false
             )

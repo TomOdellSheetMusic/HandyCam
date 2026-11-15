@@ -51,7 +51,7 @@ class StreamStateHolder @Inject constructor() {
     private val _jpegQuality = MutableStateFlow(85)
     val jpegQuality: StateFlow<Int> = _jpegQuality.asStateFlow()
 
-    private val _useAvc = MutableStateFlow(false)
+    private val _useAvc = MutableStateFlow(true)
     val useAvc: StateFlow<Boolean> = _useAvc.asStateFlow()
 
     private val _useHevc = MutableStateFlow(false)
