@@ -277,17 +277,18 @@
 
         <div class="card" id="resolutionCard">
             <div class="card-title">Resolution</div>
-            <div class="fps-presets" aria-label="Resolution presets">
-                <button class="btn-secondary" onclick="setResolution(1280, 720)">720p</button>
-                <button class="btn-secondary" onclick="setResolution(1920, 1080)">1080p</button>
-                <button class="btn-secondary" onclick="setResolution(3840, 2160)">4K</button>
+            <div class="fps-presets" id="resolutionPresets" aria-label="Resolution presets">
+                <button class="toggle-btn" data-resolution="1280x720" onclick="setResolution(1280, 720, this)">720p</button>
+                <button class="toggle-btn" data-resolution="1920x1080" onclick="setResolution(1920, 1080, this)">1080p</button>
+                <button class="toggle-btn" data-resolution="3840x2160" onclick="setResolution(3840, 2160, this)">4K</button>
+                <button class="toggle-btn" data-resolution="custom" onclick="selectCustomResolution()">Custom</button>
             </div>
-            <div class="resolution-inputs">
+            <div id="customResolution" hidden><div class="resolution-inputs">
                 <label>Width (px)<input type="number" id="resolutionWidth" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
                 <span>×</span>
                 <label>Height (px)<input type="number" id="resolutionHeight" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
             </div>
-            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply</button>
+            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply</button></div>
         </div>
 
         <div class="card">
@@ -483,6 +484,7 @@
                 if (!screenSource && !editingSettings.has('resolution')) {
                     document.getElementById('resolutionWidth').value = data.width;
                     document.getElementById('resolutionHeight').value = data.height;
+                    updateResolutionSelection(data.width, data.height);
                 }
                 document.getElementById('fps').textContent = data.fps;
                 document.getElementById('jpegQuality').textContent =
@@ -700,10 +702,25 @@
             }
         }
 
-        function setResolution(width, height) {
+        function updateResolutionSelection(width, height) {
+            const buttons = document.querySelectorAll('#resolutionPresets button');
+            const value = `${width}x${height}`;
+            const selected = [...buttons].some(button => button.dataset.resolution === value) ? value : 'custom';
+            buttons.forEach(button => {
+                const active = button.dataset.resolution === selected;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', String(active));
+            });
+            document.getElementById('customResolution').hidden = selected !== 'custom';
+        }
+
+        function selectCustomResolution() {
             editingSettings.add('resolution');
-            document.getElementById('resolutionWidth').value = width;
-            document.getElementById('resolutionHeight').value = height;
+            updateResolutionSelection(0, 0);
+        }
+
+        function setResolution(width, height, button) {
+            return applySetting('/api/settings/resolution', { width, height }, 'resolution', button);
         }
 
         function applyResolution() {

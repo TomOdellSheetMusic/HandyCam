@@ -98,9 +98,7 @@ fun MainScreen(
         if (!isStreaming && fpsValue > maxFps) viewModel.updateFps(maxFps)
     }
     LaunchedEffect(width, height) {
-        if (selectedPreset.label != "Custom") {
-            selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
-        }
+        selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
     }
 
     // Capture resolved (w, h) once so the screen capture launcher can also use it
