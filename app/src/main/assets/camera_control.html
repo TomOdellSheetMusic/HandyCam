@@ -287,7 +287,7 @@
                 <span>×</span>
                 <label>Height (px)<input type="number" id="resolutionHeight" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
             </div>
-            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply</button>
         </div>
 
         <div class="card">
@@ -299,7 +299,7 @@
                 <span class="val-label"><span id="fpsValue">30</span> fps</span>
             </div>
             <div id="fpsHint">Available: 1–60 fps. Actual frame rate may vary.</div>
-            <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply</button>
         </div>
 
         <div class="card" id="jpegCard">
@@ -309,7 +309,7 @@
                 <input type="range" id="jpegSlider" min="50" max="100" value="85" oninput="setJpegQuality(this.value)">
                 <span class="val-label"><span id="jpegValue">85</span>%</span>
             </div>
-            <button class="btn-secondary" id="applyJpegBtn" onclick="applyJpeg()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyJpegBtn" onclick="applyJpeg()">Apply</button>
         </div>
 
         <div class="card" id="avcGroup" style="display:none;">
@@ -320,7 +320,7 @@
                 <span class="val-label" id="avcValue">Auto</span>
             </div>
             <div>Set to Auto to choose a bitrate based on resolution and frame rate.</div>
-            <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply</button>
         </div>
 
         <div class="card" id="exposureCard">
