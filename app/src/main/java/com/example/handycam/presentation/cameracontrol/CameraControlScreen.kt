@@ -83,6 +83,7 @@ fun CameraControlScreen(
     viewModel: CameraControlViewModel,
     onBack: () -> Unit,
 ) {
+    val locale = LocalConfiguration.current.locales[0]
     val isStreaming by viewModel.isStreaming.collectAsState()
     val torchEnabled by viewModel.torchEnabled.collectAsState()
     val exposure by viewModel.exposure.collectAsState()
@@ -142,7 +143,7 @@ fun CameraControlScreen(
     fun shutterLabel(valueNs: Long): String {
         if (valueNs <= 0L) return "Auto"
         val seconds = valueNs / 1_000_000_000.0
-        return if (seconds >= 1.0) "${"%.1f".format(seconds)}s" else "1/${(1.0 / seconds).roundToInt().coerceAtLeast(1)}"
+        return if (seconds >= 1.0) "${"%.1f".format(locale, seconds)}s" else "1/${(1.0 / seconds).roundToInt().coerceAtLeast(1)}"
     }
 
     LaunchedEffect(showEvLabel) { if (showEvLabel) { delay(1500); showEvLabel = false } }
@@ -467,7 +468,7 @@ fun CameraControlScreen(
                     text = run {
                         val step = if (useAvc) avcExposureStep else
                             viewModel.cameraStateHolder.cameraInfo?.exposureState?.exposureCompensationStep?.toFloat() ?: 0f
-                        if (step > 0f) "Exposure %+.1f EV".format(java.util.Locale.US, exposure * step)
+                        if (step > 0f) "Exposure %+.1f EV".format(locale, exposure * step)
                         else "Exposure step $exposure"
                     },
                     color = Color.White,
@@ -493,7 +494,7 @@ fun CameraControlScreen(
                 val maxZoom = viewModel.cameraStateHolder.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8f
                 val zoomRatio = minZoom + (maxZoom - minZoom) * zoom
                 Text(
-                    text = "${"%.1f".format(zoomRatio)}x",
+                    text = "${"%.1f".format(locale, zoomRatio)}x",
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

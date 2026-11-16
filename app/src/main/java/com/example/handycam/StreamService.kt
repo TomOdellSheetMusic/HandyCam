@@ -22,6 +22,8 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.AspectRatio
 import androidx.camera.lifecycle.ProcessCameraProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,7 +98,7 @@ class StreamService : LifecycleService() {
     private var cameraHandler: Handler? = null
     private var encoderInputSurface: Surface? = null
     private var encoderOutputThread: Thread? = null
-    private val encoderOutputLock = Object()
+    private val encoderOutputLock = Any()
     @Volatile
     private var encoderOutputRunning = false
     private var imageReader: android.media.ImageReader? = null
@@ -221,8 +223,13 @@ class StreamService : LifecycleService() {
                 }
                 val host = intent.getStringExtra("host") ?: "0.0.0.0"
                 val streamingPort = intent.getIntExtra("streamingPort", 4747)
-                val width = intent.getIntExtra("width", 1080)
-                val height = intent.getIntExtra("height", 1920)
+                val screenCaptureRequested = intent.getBooleanExtra("useScreenCapture", false)
+                val screenSize = if (screenCaptureRequested) android.graphics.Point().also { size ->
+                    @Suppress("DEPRECATION")
+                    (getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealSize(size)
+                } else null
+                val width = screenSize?.x ?: intent.getIntExtra("width", 1080)
+                val height = screenSize?.y ?: intent.getIntExtra("height", 1920)
                 selectedCamera = intent.getStringExtra("camera") ?: "back"
                 jpegQuality = intent.getIntExtra("jpegQuality", 85)
                 targetFps = intent.getIntExtra("targetFps", 60)
@@ -231,7 +238,7 @@ class StreamService : LifecycleService() {
                 setInitialLensZoom(selectedCamera, useAvc)
                 val ab = intent.getIntExtra("avcBitrate", -1)
                 avcBitrateUser = if (ab > 0) ab else null
-                useScreenCapture = intent.getBooleanExtra("useScreenCapture", false)
+                useScreenCapture = screenCaptureRequested
                 useHdr = useHevc && !useScreenCapture && intent.getBooleanExtra("useHdr", false)
                 val maxFps = if (useScreenCapture) 60 else FrameRateCapabilities.maxStreamingFps(
                     getSystemService(Context.CAMERA_SERVICE) as CameraManager,
@@ -251,8 +258,10 @@ class StreamService : LifecycleService() {
                 streamStateHolder.setCamera(selectedCamera)
                 streamStateHolder.setCameraSwitchStatus("")
                 streamStateHolder.setStreamingPort(streamingPort)
-                streamStateHolder.setWidth(width)
-                streamStateHolder.setHeight(height)
+                if (useScreenCapture) streamStateHolder.setScreenSize(width, height) else {
+                    streamStateHolder.setWidth(width)
+                    streamStateHolder.setHeight(height)
+                }
                 streamStateHolder.setJpegQuality(jpegQuality)
                 streamStateHolder.setFps(targetFps)
                 streamStateHolder.setUseAvc(useAvc)
@@ -641,8 +650,8 @@ class StreamService : LifecycleService() {
         // Always stream in landscape — swap if portrait dimensions were passed
         requestedWidth = width
         requestedHeight = height
-        val w = maxOf(width, height)
-        val h = minOf(width, height)
+        val w = if (screenCapture) width else maxOf(width, height)
+        val h = if (screenCapture) height else minOf(width, height)
         // store runtime options
         selectedCamera = camera
         jpegQuality = jpegQ
@@ -699,15 +708,18 @@ class StreamService : LifecycleService() {
             // keep reference so we can rebind while streaming
             this@StreamService.cameraProvider = cameraProvider
 
+            val requestedAspect = maxOf(width, height).toFloat() / minOf(width, height).coerceAtLeast(1)
+            val preferredAspect = if (kotlin.math.abs(requestedAspect - 16f / 9f) < kotlin.math.abs(requestedAspect - 4f / 3f))
+                AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3
+            val resolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy(preferredAspect, AspectRatioStrategy.FALLBACK_RULE_AUTO))
+                .setResolutionStrategy(ResolutionStrategy(android.util.Size(width, height), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                .build()
             val analysisBuilder = ImageAnalysis.Builder()
                 // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
                 // space regardless of phone orientation — ensures consistent landscape output
                 .setTargetRotation(android.view.Surface.ROTATION_90)
-                // Request an explicit target resolution. Using ResolutionSelector can
-                // cause CameraX to pick an unexpected fallback (sometimes square).
-                // setTargetResolution requests the desired Size directly which keeps
-                // aspect ratio and avoids selecting strange square fallbacks.
-                .setTargetResolution(android.util.Size(width, height))
+                .setResolutionSelector(resolutionSelector)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             val cameraId = findCameraId(selectedCamera)
             val highRange = cameraId?.let { highFrameRateRange(it) }
@@ -973,7 +985,6 @@ class StreamService : LifecycleService() {
         screenCaptureHandlerThread = null
         screenCaptureHandler = null
         useScreenCapture = false
-        streamStateHolder.setUseScreenCapture(false)
     }
 
       private fun setupEncoder(width: Int, height: Int, fps: Int) {
@@ -1447,62 +1458,29 @@ class StreamService : LifecycleService() {
         var chosenWidth = reqWidth
         var chosenHeight = reqHeight
         try {
-            val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
+            val chars = checkNotNull(cameraManager).getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
             cameraStateHolder.setCameraOrientation(
-                chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
-                chars?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
             )
-            val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            val exposureRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
-                val exposureStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+                val exposureStep = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
                 cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper, exposureStep)
             } else {
                 cameraStateHolder.setExposureRange(0, 0)
             }
             // Camera2 output sizes are always in sensor (landscape) orientation.
             // Swap the requested dimensions so we find the right match.
-            val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             val swapDimensions = sensorOrientation == 90 || sensorOrientation == 270
             val nativeReqWidth  = if (swapDimensions && reqWidth < reqHeight) reqHeight else reqWidth
             val nativeReqHeight = if (swapDimensions && reqWidth < reqHeight) reqWidth  else reqHeight
-            val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val map = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
-                    // find exact match or choose closest, preserving aspect ratio
-                    var chosen = sizes[0]
-                    val targetAspectRatio = nativeReqWidth.toFloat() / nativeReqHeight.toFloat()
-                    var bestAspectRatioDiff = Float.MAX_VALUE
-                    var bestAreaDiff = Int.MAX_VALUE
-
-                    for (s in sizes) {
-                        // Exact match is always best
-                        if (s.width == nativeReqWidth && s.height == nativeReqHeight) {
-                            chosen = s
-                            break
-                        }
-
-                        val aspectRatio = s.width.toFloat() / s.height.toFloat()
-                        val aspectRatioDiff = Math.abs(aspectRatio - targetAspectRatio)
-
-                        // If aspect ratio is a very close match, consider it.
-                        // Then, from the matching aspect ratios, pick the one with the smallest area difference.
-                        if (aspectRatioDiff < 0.02f) {
-                            val areaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                            if (areaDiff < bestAreaDiff) {
-                                bestAreaDiff = areaDiff
-                                bestAspectRatioDiff = aspectRatioDiff
-                                chosen = s
-                            }
-                        } else if (aspectRatioDiff < bestAspectRatioDiff && bestAreaDiff > 200000) {
-                            // If no close aspect ratio has been found yet, and this one is better, take it.
-                            // The area diff check is to avoid picking a much smaller resolution just because
-                            // the aspect ratio is slightly better.
-                            bestAspectRatioDiff = aspectRatioDiff
-                            bestAreaDiff = Math.abs(s.width * s.height - nativeReqWidth * nativeReqHeight)
-                            chosen = s
-                        }
-                    }
+                    val chosen = checkNotNull(FrameRateCapabilities.selectOutputSize(sizes.toList(), nativeReqWidth, nativeReqHeight))
                     chosenWidth = chosen.width
                     chosenHeight = chosen.height
                     cameraStateHolder.setEncoderSize(chosenWidth, chosenHeight)
@@ -1542,10 +1520,6 @@ class StreamService : LifecycleService() {
             if (useHdr) throw e
             Log.w(TAG, "Could not query supported sizes, using requested size", e)
             setupEncoder(reqWidth, reqHeight, fps)
-        }
-
-        if (highSpeedCameraSession && (chosenWidth != maxOf(reqWidth, reqHeight) || chosenHeight != minOf(reqWidth, reqHeight))) {
-            throw IllegalStateException("Requested high-speed resolution is unavailable")
         }
 
         try {
@@ -1696,7 +1670,7 @@ class StreamService : LifecycleService() {
 
     private fun highFrameRateRange(cameraId: String): android.util.Range<Int>? {
         if (highSpeedCameraSession) {
-            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, requestedWidth, requestedHeight, targetFps)
+            return FrameRateCapabilities.highSpeedRange(cameraManager ?: return null, cameraId, encoderWidth, encoderHeight, targetFps)
         }
         val ranges = cameraManager?.getCameraCharacteristics(cameraId)
             ?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList() ?: return null

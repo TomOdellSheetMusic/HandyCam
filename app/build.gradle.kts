@@ -104,6 +104,20 @@ configurations.matching {
     }
 }
 
+// Tooling resolves independently of the buildscript constraints and app runtime.
+configurations.matching {
+    it.name == "androidLintTool" || it.name.startsWith("unified-test-platform-") ||
+        it.name.startsWith("kapt", ignoreCase = true) ||
+        it.name.contains("AnnotationProcessor", ignoreCase = true)
+}.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "com.google.guava" && requested.name == "guava") {
+            useVersion("33.7.2-jre")
+            because("Align Guava on a release with the deserialization fix")
+        }
+    }
+}
+
 // Lint and the UTP result listener have classpaths separate from the buildscript.
 configurations.matching {
     it.name == "androidLintTool" ||
@@ -115,6 +129,14 @@ configurations.matching {
         ) {
             useVersion("1.86")
             because("Align the tooling's Bouncy Castle modules on a patched release")
+        }
+        if (requested.group == "org.apache.commons" && requested.name == "commons-compress") {
+            useVersion("1.28.0")
+            because("Use a Commons Compress release that depends on patched Commons Lang")
+        }
+        if (requested.group == "org.apache.httpcomponents" && requested.name == "httpclient") {
+            useVersion("4.5.14")
+            because("Use a patched Apache HttpClient release")
         }
     }
 }

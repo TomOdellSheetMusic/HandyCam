@@ -19,16 +19,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.app.Activity
+import android.content.ClipData
 import android.media.projection.MediaProjectionManager
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private val FPS_OPTIONS = listOf(15, 30, 60, 120, 240)
@@ -64,6 +66,8 @@ fun MainScreen(
     val avcBitrateValue by viewModel.streamStateHolder.avcBitrate.collectAsState()
 
     val context = LocalContext.current
+    val clipboard = LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
     val mediaProjectionManager = remember {
         context.getSystemService(MediaProjectionManager::class.java)
     }
@@ -94,9 +98,7 @@ fun MainScreen(
         if (!isStreaming && fpsValue > maxFps) viewModel.updateFps(maxFps)
     }
     LaunchedEffect(width, height) {
-        if (selectedPreset.label != "Custom") {
-            selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
-        }
+        selectedPreset = matchingPreset ?: RESOLUTION_PRESETS.last()
     }
 
     // Capture resolved (w, h) once so the screen capture launcher can also use it
@@ -180,8 +182,9 @@ fun MainScreen(
                         Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(host, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            val clipboard = LocalClipboardManager.current
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(host)) },
+                            IconButton(onClick = {
+                                coroutineScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("IP address", host))) }
+                            },
                                 modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Filled.ContentCopy, contentDescription = "Copy IP",
                                     modifier = Modifier.size(16.dp))
@@ -210,61 +213,66 @@ fun MainScreen(
             // ── Video ─────────────────────────────────────────────────
             SectionCard(title = "Video") {
                 // Resolution presets
-                Text("Resolution", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    RESOLUTION_PRESETS.forEachIndexed { i, preset ->
-                        SegmentedButton(
-                            shape = SegmentedButtonDefaults.itemShape(i, RESOLUTION_PRESETS.size),
-                            selected = selectedPreset == preset,
-                            onClick = {
-                                if (!isStreaming) {
-                                    selectedPreset = preset
-                                    if (preset.label != "Custom") {
-                                        viewModel.updateResolution(preset.width, preset.height)
-                                    } else {
-                                        customWidth = width.toString()
-                                        customHeight = height.toString()
+                if (!isScreenSource) {
+                    Text("Resolution", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        RESOLUTION_PRESETS.forEachIndexed { i, preset ->
+                            SegmentedButton(
+                                shape = SegmentedButtonDefaults.itemShape(i, RESOLUTION_PRESETS.size),
+                                selected = selectedPreset == preset,
+                                enabled = !isStreaming && !isScreenSource,
+                                onClick = {
+                                    if (!isStreaming) {
+                                        selectedPreset = preset
+                                        if (preset.label != "Custom") {
+                                            viewModel.updateResolution(preset.width, preset.height)
+                                        } else {
+                                            customWidth = width.toString()
+                                            customHeight = height.toString()
+                                        }
                                     }
-                                }
-                            },
-                            label = { Text(preset.label) }
-                        )
+                                },
+                                icon = { if (preset.label != "Custom") SegmentedButtonDefaults.Icon(active = selectedPreset == preset) },
+                                label = { Text(preset.label, maxLines = 1) }
+                            )
+                        }
                     }
-                }
 
-                if (selectedPreset.label == "Custom") {
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = customWidth,
-                            onValueChange = {
-                                customWidth = it
-                                val parsedWidth = it.toIntOrNull()
-                                val parsedHeight = customHeight.toIntOrNull()
-                                if (parsedWidth != null && parsedHeight != null) {
-                                    viewModel.updateResolution(parsedWidth, parsedHeight)
-                                }
-                            },
-                            label = { Text("Width") }, modifier = Modifier.weight(1f),
-                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            enabled = !isStreaming
-                        )
-                        OutlinedTextField(
-                            value = customHeight,
-                            onValueChange = {
-                                customHeight = it
-                                val parsedWidth = customWidth.toIntOrNull()
-                                val parsedHeight = it.toIntOrNull()
-                                if (parsedWidth != null && parsedHeight != null) {
-                                    viewModel.updateResolution(parsedWidth, parsedHeight)
-                                }
-                            },
-                            label = { Text("Height") }, modifier = Modifier.weight(1f),
-                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            enabled = !isStreaming
-                        )
+                    if (selectedPreset.label == "Custom") {
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = customWidth,
+                                onValueChange = {
+                                    customWidth = it
+                                    val parsedWidth = it.toIntOrNull()
+                                    val parsedHeight = customHeight.toIntOrNull()
+                                    if (parsedWidth != null && parsedHeight != null) {
+                                        viewModel.updateResolution(parsedWidth, parsedHeight)
+                                    }
+                                },
+                                label = { Text("Width") }, modifier = Modifier.weight(1f),
+                                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                enabled = !isStreaming && !isScreenSource
+                            )
+                            OutlinedTextField(
+                                value = customHeight,
+                                onValueChange = {
+                                    customHeight = it
+                                    val parsedWidth = customWidth.toIntOrNull()
+                                    val parsedHeight = it.toIntOrNull()
+                                    if (parsedWidth != null && parsedHeight != null) {
+                                        viewModel.updateResolution(parsedWidth, parsedHeight)
+                                    }
+                                },
+                                label = { Text("Height") }, modifier = Modifier.weight(1f),
+                                singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                enabled = !isStreaming && !isScreenSource
+                            )
+                        }
                     }
+
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -345,7 +353,7 @@ fun MainScreen(
                             readOnly = true,
                             label = { Text("Camera") },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = cameraDropdownOpen) },
-                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
+                            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
                             enabled = !isStreaming
                         )
                         ExposedDropdownMenu(expanded = cameraDropdownOpen, onDismissRequest = { cameraDropdownOpen = false }) {
@@ -515,7 +523,6 @@ fun MainScreen(
                 }
                 if (httpsRunning) {
                     val serverUrl = "http://$host:$httpPort/camera"
-                    val clipboard = LocalClipboardManager.current
                     Spacer(Modifier.height(4.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -528,7 +535,9 @@ fun MainScreen(
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(
-                            onClick = { clipboard.setText(AnnotatedString(serverUrl)) },
+                            onClick = {
+                                coroutineScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Server URL", serverUrl))) }
+                            },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(

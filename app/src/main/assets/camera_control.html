@@ -170,6 +170,14 @@
 
         .fps-presets { display: flex; flex-wrap: wrap; gap: 8px; }
         .fps-presets button { flex: 1 1 65px; width: auto; margin: 0; }
+        .resolution-inputs { display: flex; align-items: end; gap: 10px; margin: 14px 0; }
+        .resolution-inputs label { flex: 1; min-width: 0; color: var(--muted); font-size: 0.8rem; }
+        .resolution-inputs input {
+            display: block; width: 100%; min-width: 0; margin-top: 5px;
+            padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--button); color: var(--text); font: inherit; font-size: 0.9rem;
+        }
+        .resolution-inputs span { color: var(--muted); padding-bottom: 10px; }
 
         .control-row .val-label {
             min-width: 36px;
@@ -177,11 +185,22 @@
             font-weight: 500;
             font-size: 0.85rem;
         }
+        .control-row #avcValue {
+            flex: 0 0 12ch;
+            font-variant-numeric: tabular-nums;
+        }
 
         .message {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            width: max-content;
+            max-width: calc(100% - 32px);
+            box-sizing: border-box;
             padding: 10px 14px;
             border-radius: 6px;
-            margin: 8px 0;
             font-size: 0.875rem;
             display: none;
         }
@@ -201,10 +220,12 @@
             margin: 0;
         }
 
-        #torchNote {
+        .control-note {
             font-size: 0.8rem;
             color: var(--error-text);
             margin-top: 4px;
+        }
+        #torchNote, #codecNote {
             display: none;
         }
         button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -234,10 +255,10 @@
             <div class="card-title">Stream Info</div>
             <div class="info-grid">
                 <span class="key">Port</span>       <span class="val" id="port">-</span>
-                <span class="key">Camera</span>     <span class="val" id="camera">-</span>
+                <span class="key">Source</span>     <span class="val" id="camera">-</span>
                 <span class="key">Resolution</span> <span class="val" id="resolution">-</span>
                 <span class="key">FPS</span>        <span class="val" id="fps">-</span>
-                <span class="key">JPEG Quality</span> <span class="val" id="jpegQuality">-</span>
+                <span class="key" id="jpegQualityLabel">JPEG Quality</span> <span class="val" id="jpegQuality">-</span>
             </div>
         </div>
 
@@ -251,6 +272,23 @@
             <div class="card-title">Camera Selection</div>
             <div id="cameraSwitchStatus" role="status"></div>
             <div class="camera-btn-row" id="cameraButtons">Loading...</div>
+            <div class="control-note" id="screenSource" hidden>Screenshare selected · Start screen capture from the app.</div>
+        </div>
+
+        <div class="card" id="resolutionCard">
+            <div class="card-title">Resolution</div>
+            <div class="fps-presets" id="resolutionPresets" aria-label="Resolution presets">
+                <button class="toggle-btn" data-resolution="1280x720" onclick="setResolution(1280, 720, this)">720p</button>
+                <button class="toggle-btn" data-resolution="1920x1080" onclick="setResolution(1920, 1080, this)">1080p</button>
+                <button class="toggle-btn" data-resolution="3840x2160" onclick="setResolution(3840, 2160, this)">4K</button>
+                <button class="toggle-btn" data-resolution="custom" onclick="selectCustomResolution()">Custom</button>
+            </div>
+            <div id="customResolution" hidden><div class="resolution-inputs">
+                <label>Width (px)<input type="number" id="resolutionWidth" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
+                <span>×</span>
+                <label>Height (px)<input type="number" id="resolutionHeight" min="1" step="1" oninput="editingSettings.add('resolution')"></label>
+            </div>
+            <button class="btn-secondary" id="applyResolutionBtn" onclick="applyResolution()">Apply</button></div>
         </div>
 
         <div class="card">
@@ -262,7 +300,7 @@
                 <span class="val-label"><span id="fpsValue">30</span> fps</span>
             </div>
             <div id="fpsHint">Available: 1–60 fps. Actual frame rate may vary.</div>
-            <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyFpsBtn" onclick="applyFps()">Apply</button>
         </div>
 
         <div class="card" id="jpegCard">
@@ -272,17 +310,18 @@
                 <input type="range" id="jpegSlider" min="50" max="100" value="85" oninput="setJpegQuality(this.value)">
                 <span class="val-label"><span id="jpegValue">85</span>%</span>
             </div>
-            <button class="btn-secondary" id="applyJpegBtn" onclick="applyJpeg()">Apply (restarts stream)</button>
+            <button class="btn-secondary" id="applyJpegBtn" onclick="applyJpeg()">Apply</button>
         </div>
 
         <div class="card" id="avcGroup" style="display:none;">
             <div class="card-title">Video Bitrate</div>
             <div class="control-row">
-                <label>Bitrate (kbps)</label>
-                <input type="range" id="avcSlider" min="256" max="8000" step="64" value="2000" oninput="setAvcBitrate(this.value)">
-                <span class="val-label" id="avcValue">2000</span>
+                <label for="avcSlider">Bitrate (Mbps)</label>
+                <input type="range" id="avcSlider" min="0" max="100" step="0.25" value="0" oninput="setAvcBitrate(this.value)">
+                <span class="val-label" id="avcValue">Auto</span>
             </div>
-            <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply (restarts stream)</button>
+            <div>Set to Auto to choose a bitrate based on resolution and frame rate.</div>
+            <button class="btn-secondary" id="applyAvcBtn" onclick="applyAvc()">Apply</button>
         </div>
 
         <div class="card" id="exposureCard">
@@ -308,14 +347,16 @@
 
         <div class="card">
             <div class="card-title">Controls</div>
-            <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
-            <div id="torchNote">Torch only works while stream is active</div>
-            <div>Stop the stream to change codec.</div>
+            <div id="torchControls">
+                <button class="toggle-btn" id="torchBtn" onclick="toggleTorch()">Torch: OFF</button>
+                <div class="control-note" id="torchNote">Torch only works while stream is active</div>
+            </div>
             <div class="codec-buttons" id="codecButtons" role="group" aria-label="Codec">
                 <button class="toggle-btn" data-codec="mjpeg" onclick="setCodec('mjpeg')" aria-pressed="false" disabled>MJPEG</button>
                 <button class="toggle-btn" data-codec="avc" onclick="setCodec('avc')" aria-pressed="false" disabled>H.264 (AVC)</button>
                 <button class="toggle-btn" data-codec="hevc" onclick="setCodec('hevc')" aria-pressed="false" disabled>H.265 (HEVC)</button>
             </div>
+            <div class="control-note" id="codecNote">Stop the stream to change codec.</div>
         </div>
 
         <div class="card">
@@ -324,6 +365,10 @@
     </div>
 
     <script>
+        const zoomFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const exposureFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        document.getElementById('zoomValue').textContent = zoomFormatter.format(1) + 'x';
+
         function updateThemeButton() {
             const dark = document.documentElement.dataset.theme !== 'light';
             const button = document.getElementById('themeBtn');
@@ -345,10 +390,13 @@
         let avcEnabled = true;
         let codecRequestInFlight = false;
         let codecLoaded = false;
-        let avcBitrate = 2000;
+        let avcBitrate = -1;
         let zoomMin = 1, zoomMax = 1, selectedCamera = "", cameraSwitchStatus = "";
+        let fpsConfiguration = null;
+        let screenSource = false;
 
         function updateCodecButtons(codec) {
+            document.getElementById('codecNote').style.display = streaming ? 'block' : 'none';
             document.querySelectorAll('#codecButtons button').forEach(button => {
                 if (codec !== undefined) {
                     const selected = button.dataset.codec === codec;
@@ -360,26 +408,25 @@
         }
 
         function isSelectedCamera(btn) {
+            if (screenSource) return false;
             if (btn.dataset.camera === selectedCamera) return true;
             if (selectedCamera === btn.dataset.facing && btn.dataset.firstFacing === 'true') return true;
-            if (selectedCamera === btn.dataset.sensorId && btn.dataset.camera.startsWith('physical:')) return true;
-            const parts = selectedCamera.split(':');
-            return parts.length === 3 && parts[0] === 'physical' &&
-                btn.dataset.sensorId === decodeURIComponent(parts[2]);
+            return false;
         }
 
+        let messageTimer;
         function showMessage(text, isSuccess) {
             const msg = document.getElementById('message');
             msg.textContent = text;
             msg.className = 'message ' + (isSuccess ? 'success' : 'error');
-            setTimeout(() => msg.className = 'message', 3000);
+            clearTimeout(messageTimer);
+            messageTimer = setTimeout(() => msg.className = 'message', 3000);
         }
 
         async function checkStatus() {
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
-
                 const badge = document.getElementById('status');
                 const text = document.getElementById('statusText');
                 streaming = data.streaming === true;
@@ -410,6 +457,17 @@
                 }
 
                 const data = await response.json();
+                screenSource = data.useScreenCapture === true;
+                streaming = data.streaming === true;
+                document.getElementById('exposureCard').hidden = screenSource;
+                document.getElementById('zoomCard').hidden = screenSource;
+                document.getElementById('torchControls').hidden = screenSource;
+                document.getElementById('resolutionCard').hidden = screenSource;
+                document.getElementById('jpegQualityLabel').hidden = data.useAvc === true;
+                document.getElementById('jpegQuality').hidden = data.useAvc === true;
+                const screenIndicator = document.getElementById('screenSource');
+                screenIndicator.hidden = !screenSource;
+                screenIndicator.textContent = streaming ? 'Screen capture is active.' : 'Screen selected · Start screen capture from the app.';
 
                 // Streaming state
                 if (data.streaming) {
@@ -420,15 +478,23 @@
 
                 // Text fields
                 document.getElementById('port').textContent = data.port;
-                document.getElementById('camera').textContent = data.camera;
+                document.getElementById('camera').textContent = screenSource ? 'Screen' : data.camera;
                 document.getElementById('resolution').textContent =
                     `${data.width}x${data.height}`;
+                if (!screenSource && !editingSettings.has('resolution')) {
+                    document.getElementById('resolutionWidth').value = data.width;
+                    document.getElementById('resolutionHeight').value = data.height;
+                    updateResolutionSelection(data.width, data.height);
+                }
                 document.getElementById('fps').textContent = data.fps;
                 document.getElementById('jpegQuality').textContent =
                     `${data.jpegQuality}%`;
 
                 // Sliders
                 const fpsSlider = document.getElementById('fpsSlider');
+                const configuration = JSON.stringify([data.camera, data.useScreenCapture, data.width, data.height, data.useAvc, data.useHevc, data.maxFps]);
+                if (fpsConfiguration !== null && fpsConfiguration !== configuration) editingSettings.delete('fps');
+                fpsConfiguration = configuration;
                 fpsSlider.max = data.maxFps || 60;
                 renderFpsPresets(Number(fpsSlider.max));
                 if (!editingSettings.has('fps')) fpsSlider.value = data.fps;
@@ -443,7 +509,7 @@
                 if (!editingSettings.has('zoom') && !zoomRequestInFlight && pendingZoom === null && zoomVersionAtRequest === zoomVersion) {
                     const zoomPercent = Math.round((data.zoom || 0) * 100);
                     document.getElementById('zoomSlider').value = zoomPercent;
-                    document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                    document.getElementById('zoomValue').textContent = zoomFormatter.format(data.zoomRatio) + 'x';
                 }
                 selectedCamera = data.camera;
                 cameraSwitchStatus = data.cameraSwitchStatus || '';
@@ -451,7 +517,7 @@
                 document.querySelectorAll('#cameraButtons button').forEach(btn => {
                     const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
-                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.disabled = cameraSwitchStatus === 'switching' || (screenSource && streaming);
                     btn.setAttribute('aria-pressed', String(active));
                 });
 
@@ -463,9 +529,11 @@
                     updateCodecButtons(!avcEnabled ? 'mjpeg' : data.useHevc ? 'hevc' : 'avc');
                 }
                 if (!editingSettings.has('avc')) {
-                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : 2000;
-                    document.getElementById('avcSlider').value = avcBitrate;
-                    document.getElementById('avcValue').textContent = avcBitrate;
+                    avcBitrate = data.avcBitrate > 0 ? data.avcBitrate : -1;
+                    const slider = document.getElementById('avcSlider');
+                    slider.max = Math.max(100, Math.ceil(avcBitrate / 1000000));
+                    slider.value = avcBitrate > 0 ? avcBitrate / 1000000 : 0;
+                    document.getElementById('avcValue').textContent = avcBitrate > 0 ? `${avcBitrate / 1000000} Mbps` : 'Auto';
                 }
                 avcGroupPlaceholder = null;
                 const jpegCard = document.getElementById('jpegCard');
@@ -563,17 +631,20 @@
             const value = Number(input.value);
             const max = Number(input.max);
             const valid = input.value !== '' && Number.isInteger(value) && value >= 1 && value <= max;
+            const locked = screenSource && streaming;
+            input.disabled = locked;
             document.getElementById('fpsValue').textContent = input.value;
             document.querySelectorAll('#fpsPresets button').forEach(button => {
                 const selected = Number(button.dataset.fps) === value;
                 button.classList.toggle('active', selected);
+                button.disabled = locked;
                 button.setAttribute('aria-pressed', String(selected));
             });
-            document.getElementById('fpsHint').textContent = valid ?
+            document.getElementById('fpsHint').textContent = locked ? 'Stop screen capture before changing frame rate.' : valid ?
                 `Available: 1–${max} fps. Actual frame rate may vary.` :
                 `Choose a frame rate from 1 to ${max}.`;
-            document.getElementById('applyFpsBtn').disabled = !valid;
-            return valid;
+            document.getElementById('applyFpsBtn').disabled = !valid || locked;
+            return valid && !locked;
         }
 
         function renderFpsPresets(max) {
@@ -631,6 +702,37 @@
             }
         }
 
+        function updateResolutionSelection(width, height) {
+            const buttons = document.querySelectorAll('#resolutionPresets button');
+            const value = `${width}x${height}`;
+            const selected = [...buttons].some(button => button.dataset.resolution === value) ? value : 'custom';
+            buttons.forEach(button => {
+                const active = button.dataset.resolution === selected;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', String(active));
+            });
+            document.getElementById('customResolution').hidden = selected !== 'custom';
+        }
+
+        function selectCustomResolution() {
+            editingSettings.add('resolution');
+            updateResolutionSelection(0, 0);
+        }
+
+        function setResolution(width, height, button) {
+            return applySetting('/api/settings/resolution', { width, height }, 'resolution', button);
+        }
+
+        function applyResolution() {
+            const width = Number(document.getElementById('resolutionWidth').value);
+            const height = Number(document.getElementById('resolutionHeight').value);
+            if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > 2147483647 || height > 2147483647) {
+                showMessage('Enter positive whole numbers for width and height.', false);
+                return;
+            }
+            return applySetting('/api/settings/resolution', { width, height }, 'resolution', document.getElementById('applyResolutionBtn'));
+        }
+
         function applyFps() {
             if (!updateFpsValidation()) return;
             return applySetting('/api/settings/fps', { fps: Number(document.getElementById('fpsSlider').value) }, 'fps', document.getElementById('applyFpsBtn'));
@@ -672,7 +774,7 @@
         function formatExposure(index) {
             if (!(exposureStep > 0)) return `Step ${index}`;
             const ev = Number(index) * exposureStep;
-            return `${ev > 0 ? '+' : ''}${ev.toFixed(2)} EV`;
+            return `${ev > 0 ? '+' : ''}${exposureFormatter.format(ev)} EV`;
         }
 
         function setExposure(exposure) {
@@ -711,7 +813,7 @@
             editingSettings.add('zoom');
             const fraction = Number(zoomPercent) / 100;
             const ratio = avcEnabled ? zoomMin + fraction * (zoomMax - zoomMin) : 1 / ((1 - fraction) / zoomMin + fraction / zoomMax);
-            document.getElementById('zoomValue').textContent = ratio.toFixed(1) + 'x';
+            document.getElementById('zoomValue').textContent = zoomFormatter.format(ratio) + 'x';
             zoomVersion++;
             pendingZoom = Number(zoomPercent);
             if (!zoomRequestInFlight) sendPendingZoom();
@@ -782,8 +884,9 @@
 
         function setAvcBitrate(b) {
             editingSettings.add('avc');
-            avcBitrate = parseInt(b);
-            document.getElementById('avcValue').textContent = avcBitrate;
+            const mbps = Number(b);
+            avcBitrate = mbps > 0 ? Math.round(mbps * 1000000) : -1;
+            document.getElementById('avcValue').textContent = mbps > 0 ? `${mbps} Mbps` : 'Auto';
         }
 
         function applyAvc() {
@@ -809,7 +912,7 @@
                     seenFacings.add(item.facing);
                     const active = isSelectedCamera(btn);
                     btn.classList.toggle('active', active);
-                    btn.disabled = cameraSwitchStatus === 'switching';
+                    btn.disabled = cameraSwitchStatus === 'switching' || (screenSource && streaming);
                     btn.setAttribute('aria-pressed', String(active));
                     btn.onclick = () => {
                         switchCamera(item.id);

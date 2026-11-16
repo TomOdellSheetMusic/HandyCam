@@ -50,6 +50,7 @@ class KtorHttpServerService : LifecycleService() {
     
     @javax.inject.Inject lateinit var cameraStateHolder: com.example.handycam.service.CameraStateHolder
     @javax.inject.Inject lateinit var preferences: com.example.handycam.data.preferences.PreferencesManager
+    @javax.inject.Inject lateinit var cameraRepository: com.example.handycam.data.repository.CameraRepository
 
     private var startTime: Long = 0
 
@@ -229,10 +230,11 @@ class KtorHttpServerService : LifecycleService() {
                     streaming = (streamStateHolder.isStreaming.value),
                     port = (streamStateHolder.streamingPort.value),
                     camera = (streamStateHolder.camera.value),
+                    useScreenCapture = streamStateHolder.useScreenCapture.value,
                     cameraSwitchStatus = streamStateHolder.cameraSwitchStatus.value,
                     requestedCamera = streamStateHolder.requestedCamera.value,
-                    width = (streamStateHolder.width.value),
-                    height = (streamStateHolder.height.value),
+                    width = if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) streamStateHolder.screenSize.value?.first ?: streamStateHolder.width.value else streamStateHolder.width.value,
+                    height = if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) streamStateHolder.screenSize.value?.second ?: streamStateHolder.height.value else streamStateHolder.height.value,
                     fps = (streamStateHolder.fps.value),
                     maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
                         FrameRateCapabilities.maxStreamingFps(cm, selection, streamStateHolder.width.value, streamStateHolder.height.value, streamStateHolder.useAvc.value),
@@ -257,68 +259,16 @@ class KtorHttpServerService : LifecycleService() {
             }
 
             get("/api/camera/list") {
-                val list = mutableListOf<CameraListItem>()
-                val seenPhysicalIds = mutableSetOf<String>()
-                try {
-                    val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    for (id in cm.cameraIdList) {
-                        try {
-                            val chars = cm.getCameraCharacteristics(id)
-                            val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
-                                CameraCharacteristics.LENS_FACING_FRONT -> "front"
-                                CameraCharacteristics.LENS_FACING_BACK -> "back"
-                                else -> "external"
-                            }
-                            fun addEntry(key: String, cameraId: String, logical: Boolean) {
-                                if (!logical && cameraId in seenPhysicalIds) return
-                                val info = cm.getCameraCharacteristics(cameraId)
-                                val focal = info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
-                                val focalDesc = focal?.let { String.format(java.util.Locale.US, "%.1f mm", it) } ?: ""
-                                val size = info.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                                val equivalent = if (focal != null && size != null && size.width > 0f && size.height > 0f)
-                                    focal * 43.27f / kotlin.math.sqrt(size.width * size.width + size.height * size.height) else null
-                                val name = when {
-                                    logical && facing == "back" -> "Back (auto)"
-                                    logical && facing == "front" -> "Front (auto)"
-                                    logical -> "External (auto)"
-                                    facing == "front" -> "Front"
-                                    facing != "back" -> "External"
-                                    equivalent == null -> "Back camera"
-                                    equivalent < 20f -> "Ultra-wide (estimated)"
-                                    equivalent > 45f -> "Telephoto (estimated)"
-                                    else -> "Wide (estimated)"
-                                }
-                                if (!logical) seenPhysicalIds.add(cameraId)
-                                list.add(CameraListItem(key, name, facing, focalDesc, cameraId))
-                            }
-                            addEntry(id, id, chars.physicalCameraIds.isNotEmpty())
-                            chars.physicalCameraIds.forEach { physical ->
-                                try { addEntry(PhysicalLens.key(id, physical), physical, false) } catch (_: Exception) { }
-                            }
-                        } catch (_: Exception) { }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Camera enumeration failed", e)
-                }
-
-                val totals = list.groupingBy { it.label }.eachCount()
-                val counts = mutableMapOf<String, Int>()
-                val labelled = list.map { item ->
-                    val name = if ((totals[item.label] ?: 0) <= 1) item.label else {
-                        val number = (counts[item.label] ?: 0) + 1
-                        counts[item.label] = number
-                        "${item.label} $number"
-                    }
-                    item.copy(label = listOf(name, item.focalDesc).filter { it.isNotEmpty() }.joinToString(" - "))
-                }
-                call.respond(labelled)
+                call.respond(cameraRepository.getAvailableCameras().map { camera ->
+                    CameraListItem(camera.id, camera.displayName, camera.facing, camera.focalLength ?: "", camera.id)
+                })
             }
             
             post("/api/camera/start") {
 
                 try {
-                    if (streamStateHolder.isStreaming.value && streamStateHolder.useScreenCapture.value) {
-                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture and start it again from the app"))
+                    if (streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Start screen capture from the app"))
                         return@post
                     }
                     if (!streamStateHolder.isStreaming.value && !isAppInForeground()) {
@@ -412,6 +362,10 @@ class KtorHttpServerService : LifecycleService() {
             
             post("/api/camera/switch") {
                 try {
+                    if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before switching cameras"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, String>>()
                     val camera = params["camera"] ?: throw IllegalArgumentException("Missing camera")
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -438,6 +392,9 @@ class KtorHttpServerService : LifecycleService() {
                         }
                         call.respond(ApiResponse(true, if (reduced) "Switching camera and reducing target to $adjustedFps fps" else "Switching camera"))
                     } else {
+                        preferences.updateUseScreenCapture(false)
+                        preferences.updateCamera(camera)
+                        streamStateHolder.setUseScreenCapture(false)
                         streamStateHolder.setCamera(camera)
                         streamStateHolder.setFps(adjustedFps)
                         streamStateHolder.setCameraSwitchStatus("")
@@ -452,6 +409,10 @@ class KtorHttpServerService : LifecycleService() {
             // New endpoints for all controls
             post("/api/settings/fps") {
                 try {
+                    if (streamStateHolder.useScreenCapture.value && streamStateHolder.isStreaming.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Stop screen capture before changing frame rate"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, Int>>()
                     val fps = params["fps"] ?: 30
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -467,14 +428,21 @@ class KtorHttpServerService : LifecycleService() {
 
             post("/api/settings/resolution") {
                 try {
+                    if (streamStateHolder.useScreenCapture.value) {
+                        call.respond(HttpStatusCode.Conflict, ApiResponse(false, "Screen capture uses the display resolution"))
+                        return@post
+                    }
                     val params = call.receive<Map<String, Int>>()
                     val width = params["width"] ?: 1080
                     val height = params["height"] ?: 1920
+                    require(width > 0 && height > 0) { "Width and height must be positive" }
                     val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
                     val maxFps = if (streamStateHolder.useScreenCapture.value) 60 else
                         FrameRateCapabilities.maxStreamingFps(manager, streamStateHolder.camera.value, width, height, streamStateHolder.useAvc.value)
                     val adjustedFps = FrameRateCapabilities.clampTarget(streamStateHolder.fps.value, maxFps)
                     val reduced = adjustedFps < streamStateHolder.fps.value
+                    preferences.updateResolution(width, height)
+                    if (reduced) preferences.updateFps(adjustedFps)
                     streamStateHolder.setWidth(width)
                     streamStateHolder.setHeight(height)
                     streamStateHolder.setFps(adjustedFps)
@@ -549,8 +517,10 @@ class KtorHttpServerService : LifecycleService() {
                 try {
                     val params = call.receive<Map<String, Int>>()
                     val bitrate = params["bitrate"] ?: -1
+                    require(bitrate == -1 || bitrate > 0) { "Bitrate must be positive or automatic" }
+                    preferences.updateAvcBitrate(bitrate.takeIf { it > 0 })
                     streamStateHolder.setAvcBitrate(bitrate)
-                    call.respond(ApiResponse(true, "AVC bitrate set to $bitrate"))
+                    call.respond(ApiResponse(true, if (bitrate > 0) "Bitrate updated" else "Bitrate set to auto"))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiResponse(false, "Invalid avc bitrate: ${e.message}"))
                 }

@@ -21,6 +21,19 @@ object FrameRateCapabilities {
         ranges.filter { it.upper >= fps }
             .minWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
 
+    /** Match the resolution used by the Camera2 encoder path. */
+    fun selectOutputSize(sizes: List<Size>, width: Int, height: Int): Size? {
+        if (sizes.isEmpty() || width <= 0 || height <= 0) return null
+        val w = maxOf(width, height)
+        val h = minOf(width, height)
+        val targetAspect = w.toFloat() / h
+        fun aspectDifference(size: Size) = kotlin.math.abs(size.width.toFloat() / size.height - targetAspect)
+        fun areaDifference(size: Size) = kotlin.math.abs(size.width.toLong() * size.height - w.toLong() * h)
+        val similar = sizes.filter { aspectDifference(it) <= 0.05f }
+        return if (similar.isNotEmpty()) similar.minWithOrNull(compareBy<Size> { areaDifference(it) }.thenBy { aspectDifference(it) })
+        else sizes.minWithOrNull(compareBy<Size> { aspectDifference(it) }.thenBy { areaDifference(it) })
+    }
+
     fun limits(manager: CameraManager, selection: String, width: Int, height: Int, avc: Boolean): Limits {
         // A conservative target when Android does not report usable stream metadata.
         val fallback = Limits(30, 0)
@@ -35,7 +48,9 @@ object FrameRateCapabilities {
             val logical = manager.getCameraCharacteristics(logicalId)
             val sensor = manager.getCameraCharacteristics(physical?.second ?: logicalId)
             val map = sensor.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return fallback
-            val size = Size(maxOf(width, height), minOf(width, height))
+            val requestedSize = Size(maxOf(width, height), minOf(width, height))
+            val size = if (avc) selectOutputSize(map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList(), width, height)
+                ?: requestedSize else requestedSize
             val encoders = if (avc) MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { codec ->
                 codec.isEncoder && codec.supportedTypes.any { it.equals("video/avc", ignoreCase = true) }
             } else emptyList()

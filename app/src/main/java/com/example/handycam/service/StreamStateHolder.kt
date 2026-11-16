@@ -45,6 +45,10 @@ class StreamStateHolder @Inject constructor() {
     private val _height = MutableStateFlow(1080)
     val height: StateFlow<Int> = _height.asStateFlow()
 
+    private val _screenSize = MutableStateFlow<Pair<Int, Int>?>(null)
+    val screenSize: StateFlow<Pair<Int, Int>?> = _screenSize.asStateFlow()
+    fun setScreenSize(width: Int, height: Int) { _screenSize.value = width to height }
+
     private val _fps = MutableStateFlow(30)
     val fps: StateFlow<Int> = _fps.asStateFlow()
 
