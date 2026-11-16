@@ -70,21 +70,6 @@ jobs:
       - name: Build release APK
         run: ./gradlew :app:assembleRelease
 
-      - name: Ensure nightly release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GIT_SHA: ${{ github.sha }}
-        run: |
-          if gh release view nightly >/dev/null 2>&1; then
-            echo "Reusing the existing nightly release."
-          else
-            gh release create nightly \
-              --prerelease \
-              --target "$GIT_SHA" \
-              --title "Nightly (dev)" \
-              --notes "Rolling nightly build from dev — $GIT_SHA"
-          fi
-
       - name: Normalize artifact name
         env:
           VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
@@ -99,43 +84,30 @@ jobs:
         with:
           subject-path: app/build/outputs/apk/release/*.apk
 
-      - name: Attach APK to nightly release
+      - name: Generate Obtainium config
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          OUT='app/build/outputs/apk/release'
-          for f in "$OUT"/*.apk; do
-            [ -e "$f" ] || continue
-            echo "Uploading $f"
-            gh release upload nightly "$f" --clobber
-          done
-
-      - name: Generate and attach Obtainium config
-        env:
-          GH_TOKEN: ${{ github.token }}
           VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
-        run: |
-          node scripts/obtainium-generate.js "$VERSION_NAME" "nightly" obtainium.json
-          gh release upload nightly obtainium.json --clobber
+        run: node scripts/obtainium-generate.js "$VERSION_NAME" "nightly" obtainium.json
 
-      - name: Remove superseded nightly APKs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
-        run: |
-          set -euo pipefail
-          current="HandyCam-${VERSION_NAME}-universal.apk"
-          gh release view nightly --json assets > nightly-assets.json
-          jq -e --arg current "$current" 'any(.assets[]; .name == $current)' nightly-assets.json > /dev/null
-          jq -r --arg current "$current" '.assets[] | select((.name | test("^HandyCam.*\\.apk$")) and .name != $current) | .name' nightly-assets.json > old-apks.txt
-          while IFS= read -r name; do
-            echo "Removing superseded nightly asset: $name"
-            gh release delete-asset nightly "$name" --yes
-          done < old-apks.txt
-
-      - name: Update nightly release details
+      - name: Replace nightly release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_NAME: ${{ env.ANDROID_VERSION_NAME }}
           GIT_SHA: ${{ github.sha }}
-        run: gh release edit nightly --title "Nightly (dev)" --notes "Nightly $VERSION_NAME from dev — $GIT_SHA"
+        run: |
+          set -euo pipefail
+          releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')
+          if grep -Fxq nightly <<< "$releases"; then
+            gh release delete nightly --yes
+          fi
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/nightly" --jq '.[].ref')
+          if grep -Fxq refs/tags/nightly <<< "$refs"; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly"
+          fi
+          gh release create nightly \
+            "app/build/outputs/apk/release/HandyCam-${VERSION_NAME}-universal.apk" \
+            obtainium.json \
+            --target "$GIT_SHA" \
+            --title "Nightly (dev)" \
+            --notes "Nightly $VERSION_NAME from dev ? $GIT_SHA" \
+            --prerelease
