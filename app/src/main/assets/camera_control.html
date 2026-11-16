@@ -364,6 +364,10 @@
     </div>
 
     <script>
+        const zoomFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const exposureFormatter = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        document.getElementById('zoomValue').textContent = zoomFormatter.format(1) + 'x';
+
         function updateThemeButton() {
             const dark = document.documentElement.dataset.theme !== 'light';
             const button = document.getElementById('themeBtn');
@@ -503,7 +507,7 @@
                 if (!editingSettings.has('zoom') && !zoomRequestInFlight && pendingZoom === null && zoomVersionAtRequest === zoomVersion) {
                     const zoomPercent = Math.round((data.zoom || 0) * 100);
                     document.getElementById('zoomSlider').value = zoomPercent;
-                    document.getElementById('zoomValue').textContent = data.zoomRatio.toFixed(1) + 'x';
+                    document.getElementById('zoomValue').textContent = zoomFormatter.format(data.zoomRatio) + 'x';
                 }
                 selectedCamera = data.camera;
                 cameraSwitchStatus = data.cameraSwitchStatus || '';
@@ -753,7 +757,7 @@
         function formatExposure(index) {
             if (!(exposureStep > 0)) return `Step ${index}`;
             const ev = Number(index) * exposureStep;
-            return `${ev > 0 ? '+' : ''}${ev.toFixed(2)} EV`;
+            return `${ev > 0 ? '+' : ''}${exposureFormatter.format(ev)} EV`;
         }
 
         function setExposure(exposure) {
@@ -792,7 +796,7 @@
             editingSettings.add('zoom');
             const fraction = Number(zoomPercent) / 100;
             const ratio = avcEnabled ? zoomMin + fraction * (zoomMax - zoomMin) : 1 / ((1 - fraction) / zoomMin + fraction / zoomMax);
-            document.getElementById('zoomValue').textContent = ratio.toFixed(1) + 'x';
+            document.getElementById('zoomValue').textContent = zoomFormatter.format(ratio) + 'x';
             zoomVersion++;
             pendingZoom = Number(zoomPercent);
             if (!zoomRequestInFlight) sendPendingZoom();
