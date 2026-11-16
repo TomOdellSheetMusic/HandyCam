@@ -22,6 +22,8 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.AspectRatio
 import androidx.camera.lifecycle.ProcessCameraProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,7 +98,7 @@ class StreamService : LifecycleService() {
     private var cameraHandler: Handler? = null
     private var encoderInputSurface: Surface? = null
     private var encoderOutputThread: Thread? = null
-    private val encoderOutputLock = Object()
+    private val encoderOutputLock = Any()
     @Volatile
     private var encoderOutputRunning = false
     private var imageReader: android.media.ImageReader? = null
@@ -706,15 +708,18 @@ class StreamService : LifecycleService() {
             // keep reference so we can rebind while streaming
             this@StreamService.cameraProvider = cameraProvider
 
+            val requestedAspect = maxOf(width, height).toFloat() / minOf(width, height).coerceAtLeast(1)
+            val preferredAspect = if (kotlin.math.abs(requestedAspect - 16f / 9f) < kotlin.math.abs(requestedAspect - 4f / 3f))
+                AspectRatio.RATIO_16_9 else AspectRatio.RATIO_4_3
+            val resolutionSelector = ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy(preferredAspect, AspectRatioStrategy.FALLBACK_RULE_AUTO))
+                .setResolutionStrategy(ResolutionStrategy(android.util.Size(width, height), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                .build()
             val analysisBuilder = ImageAnalysis.Builder()
                 // Lock to ROTATION_90 so CameraX interprets dimensions in sensor/landscape
                 // space regardless of phone orientation — ensures consistent landscape output
                 .setTargetRotation(android.view.Surface.ROTATION_90)
-                // Request an explicit target resolution. Using ResolutionSelector can
-                // cause CameraX to pick an unexpected fallback (sometimes square).
-                // setTargetResolution requests the desired Size directly which keeps
-                // aspect ratio and avoids selecting strange square fallbacks.
-                .setTargetResolution(android.util.Size(width, height))
+                .setResolutionSelector(resolutionSelector)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             val cameraId = findCameraId(selectedCamera)
             val highRange = cameraId?.let { highFrameRateRange(it) }
@@ -1453,25 +1458,25 @@ class StreamService : LifecycleService() {
         var chosenWidth = reqWidth
         var chosenHeight = reqHeight
         try {
-            val chars = cameraManager?.getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
+            val chars = checkNotNull(cameraManager).getCameraCharacteristics(PhysicalLens.parse(selectedCamera)?.second ?: camId)
             cameraStateHolder.setCameraOrientation(
-                chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
-                chars?.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0,
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
             )
-            val exposureRange = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            val exposureRange = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
             if (exposureRange != null) {
-                val exposureStep = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+                val exposureStep = chars.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
                 cameraStateHolder.setExposureRange(exposureRange.lower, exposureRange.upper, exposureStep)
             } else {
                 cameraStateHolder.setExposureRange(0, 0)
             }
             // Camera2 output sizes are always in sensor (landscape) orientation.
             // Swap the requested dimensions so we find the right match.
-            val sensorOrientation = chars?.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             val swapDimensions = sensorOrientation == 90 || sensorOrientation == 270
             val nativeReqWidth  = if (swapDimensions && reqWidth < reqHeight) reqHeight else reqWidth
             val nativeReqHeight = if (swapDimensions && reqWidth < reqHeight) reqWidth  else reqHeight
-            val map = chars?.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val map = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
                 val sizes = map.getOutputSizes(SurfaceTexture::class.java)
                 if (sizes != null && sizes.isNotEmpty()) {
