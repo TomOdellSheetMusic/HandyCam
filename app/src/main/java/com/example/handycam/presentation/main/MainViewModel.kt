@@ -89,6 +89,7 @@ class MainViewModel @Inject constructor(
             val settings = preferences.appSettingsFlow.first()
             streamStateHolder.setHost(settings.host)
             streamStateHolder.setStreamingPort(settings.streamingPort)
+            streamStateHolder.setHttpPort(settings.httpPort)
             streamStateHolder.setCamera(settings.camera)
             streamStateHolder.setUseScreenCapture(settings.useScreenCapture)
         }
@@ -174,6 +175,11 @@ class MainViewModel @Inject constructor(
     fun updateStreamingPort(port: Int) {
         streamStateHolder.setStreamingPort(port)
         viewModelScope.launch { preferences.updateStreamingPort(port) }
+    }
+
+    fun updateHttpPort(port: Int) {
+        streamStateHolder.setHttpPort(port)
+        viewModelScope.launch { preferences.updateHttpPort(port) }
     }
 
     fun updateCamera(camera: String) {

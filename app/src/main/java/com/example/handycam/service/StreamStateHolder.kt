@@ -36,6 +36,9 @@ class StreamStateHolder @Inject constructor() {
     private val _streamingPort = MutableStateFlow(4747)
     val streamingPort: StateFlow<Int> = _streamingPort.asStateFlow()
 
+    private val _httpPort = MutableStateFlow(8080)
+    val httpPort: StateFlow<Int> = _httpPort.asStateFlow()
+
     private val _host = MutableStateFlow("0.0.0.0")
     val host: StateFlow<String> = _host.asStateFlow()
 
@@ -120,6 +123,7 @@ class StreamStateHolder @Inject constructor() {
     fun setHttpsRunning(value: Boolean) { _httpsRunning.value = value }
     fun setCamera(value: String) { _camera.value = value }
     fun setStreamingPort(value: Int) { _streamingPort.value = value }
+    fun setHttpPort(value: Int) { _httpPort.value = value }
     fun setHost(value: String) { _host.value = value }
     fun setWidth(value: Int) { _width.value = value }
     fun setHeight(value: Int) { _height.value = value }

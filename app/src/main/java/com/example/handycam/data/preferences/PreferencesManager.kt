@@ -54,6 +54,7 @@ class PreferencesManager(private val context: Context) {
             AppSettings(
                 host = preferences[PreferenceKeys.HOST] ?: "0.0.0.0",
                 streamingPort = preferences[PreferenceKeys.STREAMING_PORT] ?: 4747,
+                httpPort = preferences[PreferenceKeys.HTTP_PORT] ?: 8080,
                 camera = preferences[PreferenceKeys.CAMERA] ?: "back",
                 isStreaming = preferences[PreferenceKeys.IS_STREAMING] ?: false,
                 useScreenCapture = preferences[PreferenceKeys.USE_SCREEN_CAPTURE] ?: false
@@ -82,6 +83,12 @@ class PreferencesManager(private val context: Context) {
     suspend fun updateStreamingPort(port: Int) {
         dataStore.edit { preferences ->
             preferences[PreferenceKeys.STREAMING_PORT] = port
+        }
+    }
+
+    suspend fun updateHttpPort(port: Int) {
+        dataStore.edit { preferences ->
+            preferences[PreferenceKeys.HTTP_PORT] = port
         }
     }
 

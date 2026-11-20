@@ -55,6 +55,7 @@ fun MainScreen(
     val isScreenStreaming by viewModel.streamStateHolder.useScreenCapture.collectAsState()
     val hostValue by viewModel.streamStateHolder.host.collectAsState()
     val streamingPort by viewModel.streamStateHolder.streamingPort.collectAsState()
+    val httpPortValue by viewModel.streamStateHolder.httpPort.collectAsState()
     val width by viewModel.streamStateHolder.width.collectAsState()
     val height by viewModel.streamStateHolder.height.collectAsState()
     val selectedCameraId by viewModel.streamStateHolder.camera.collectAsState()
@@ -87,7 +88,7 @@ fun MainScreen(
     var avcBitrate by remember(avcBitrateValue) {
         mutableStateOf(if (avcBitrateValue > 0) (avcBitrateValue / 1_000_000f).toString() else "")
     }
-    var httpPort by remember { mutableStateOf("8080") }
+    var httpPort by remember(httpPortValue) { mutableStateOf(httpPortValue.toString()) }
 
     var cameraDropdownOpen by remember { mutableStateOf(false) }
     val isScreenSource = isScreenStreaming
@@ -502,7 +503,13 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedTextField(
-                        value = httpPort, onValueChange = { httpPort = it },
+                        value = httpPort,
+                        onValueChange = {
+                            httpPort = it
+                            it.toIntOrNull()
+                                ?.takeIf { port -> port in 1..65535 }
+                                ?.let(viewModel::updateHttpPort)
+                        },
                         label = { Text("Port") },
                         modifier = Modifier.width(120.dp), singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -511,7 +518,13 @@ fun MainScreen(
                     Button(
                         onClick = {
                             if (httpsRunning) viewModel.stopHttpsServer()
-                            else viewModel.startHttpsServer(httpPort.toIntOrNull() ?: 8443)
+                            else {
+                                val resolvedHttpPort = httpPort.toIntOrNull()
+                                    ?.takeIf { port -> port in 1..65535 }
+                                    ?: httpPortValue
+                                viewModel.updateHttpPort(resolvedHttpPort)
+                                viewModel.startHttpsServer(resolvedHttpPort)
+                            }
                         },
                         modifier = Modifier.weight(1f),
                         colors = if (httpsRunning) ButtonDefaults.buttonColors(
