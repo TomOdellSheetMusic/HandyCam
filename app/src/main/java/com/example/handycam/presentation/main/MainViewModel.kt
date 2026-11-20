@@ -2,6 +2,10 @@ package com.example.handycam.presentation.main
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.handycam.KtorHttpServerService
@@ -15,6 +19,8 @@ import com.example.handycam.data.repository.CameraRepository
 import com.example.handycam.service.StreamStateHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.net.Inet4Address
@@ -35,7 +41,44 @@ class MainViewModel @Inject constructor(
     private val _availableCameras = MutableStateFlow<List<CameraInfo>>(emptyList())
     val availableCameras: StateFlow<List<CameraInfo>> = _availableCameras.asStateFlow()
 
-    val localIp: String get() = getLocalIpAddress() ?: "0.0.0.0"
+    /** Wi-Fi IP, refreshed when Android reports a network or link-properties change. */
+    val localIp: StateFlow<String> = callbackFlow {
+        val connectivityManager =
+            context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        fun refresh(): Unit {
+            trySend(getLocalIpAddress() ?: UNKNOWN_IP)
+        }
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refresh()
+
+            override fun onLost(network: Network) = refresh()
+
+            override fun onCapabilitiesChanged(
+                network: Network,
+                networkCapabilities: NetworkCapabilities,
+            ) = refresh()
+
+            override fun onLinkPropertiesChanged(
+                network: Network,
+                linkProperties: LinkProperties,
+            ) = refresh()
+        }
+
+        refresh()
+        connectivityManager.registerDefaultNetworkCallback(callback)
+
+        awaitClose {
+            connectivityManager.unregisterNetworkCallback(callback)
+        }
+    }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = getLocalIpAddress() ?: UNKNOWN_IP,
+        )
 
     fun maxStreamingFps(camera: String, width: Int, height: Int, avc: Boolean): Int =
         cameraRepository.maxStreamingFps(camera, width, height, avc)
@@ -193,6 +236,10 @@ class MainViewModel @Inject constructor(
             action = StreamActions.SET_CAMERA
             putExtra("camera", camera)
         })
+    }
+
+    private companion object {
+        const val UNKNOWN_IP = "0.0.0.0"
     }
 
     private fun getLocalIpAddress(): String? {

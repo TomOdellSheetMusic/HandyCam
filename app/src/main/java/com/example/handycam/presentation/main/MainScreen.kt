@@ -72,7 +72,7 @@ fun MainScreen(
         context.getSystemService(MediaProjectionManager::class.java)
     }
 
-    val host = viewModel.localIp
+    val host by viewModel.localIp.collectAsState()
     var port by remember(streamingPort) { mutableStateOf(streamingPort.toString()) }
     val matchingPreset = remember(width, height) {
         RESOLUTION_PRESETS.firstOrNull { it.label != "Custom" && it.width == width && it.height == height }
