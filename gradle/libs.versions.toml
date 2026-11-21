@@ -18,7 +18,7 @@ hilt = "2.60.1"
 datastore = "1.1.7"
 coroutines = "1.11.0"
 navigation = "2.9.5"
-ktor = "3.3.2"
+ktor = "3.6.1"
 netty = "4.2.21.Final"
 
 [libraries]
