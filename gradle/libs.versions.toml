@@ -19,7 +19,7 @@ datastore = "1.1.7"
 coroutines = "1.11.0"
 navigation = "2.9.5"
 ktor = "3.3.2"
-netty = "4.2.17.Final"
+netty = "4.2.21.Final"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
