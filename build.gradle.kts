@@ -8,7 +8,7 @@ buildscript {
         // Security updates for transitive build-tool dependencies reported by Dependabot.
         constraints {
             classpath("com.google.guava:guava:33.7.2-jre")
-            classpath("org.bitbucket.b_c:jose4j:0.9.6")
+            classpath("org.bitbucket.b_c:jose4j:0.9.7")
             classpath("org.jdom:jdom2:2.0.6.1")
             classpath("org.apache.commons:commons-compress:1.28.0")
         }
